@@ -18,8 +18,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # SDK уже есть на раннере ubuntu-latest; setup-android@v3 падает на пакете 'tools'.
       - name: Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
 
       - name: Gradle
         uses: gradle/actions/setup-gradle@v4
