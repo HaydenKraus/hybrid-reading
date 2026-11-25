@@ -95,6 +95,11 @@ class MenuController(
         root.translationY = (bottomY - totalHeight).toFloat()
     }
 
+    /** Раскрыть/свернуть список действий (в приложении — по нажатию кнопки). */
+    internal fun expand(value: Boolean) = setExpanded(value)
+
+    internal fun isExpanded(): Boolean = expanded
+
     private fun close() = setExpanded(false)
 
     private fun setExpanded(value: Boolean) {

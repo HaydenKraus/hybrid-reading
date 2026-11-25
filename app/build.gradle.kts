@@ -12,8 +12,8 @@ android {
         applicationId = "app.hybridreading"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.9.0"
+        versionCode = 14
+        versionName = "2.0.0"
     }
 
     buildTypes {
@@ -42,13 +42,14 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 
     testOptions {
-        // Тесты покрывают только чистый Kotlin (UrlTools/AdBlocker): Robolectric и андроид-ресурсы не нужны,
-        // а вызовы android.*-заглушек должны возвращать дефолты вместо NotImplementedError.
+        // Часть тестов — на Robolectric (хранилища, ресурсы, View), остальные на чистом Kotlin.
         unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
         unitTests.isIncludeAndroidResources = false
     }
 
@@ -67,4 +68,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
 }

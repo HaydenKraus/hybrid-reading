@@ -27,6 +27,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,12 +62,13 @@ fun SitesDrawerContent(
     sites: List<Site>,
     activeId: String?,
     onSelect: (Site) -> Unit,
-    onAdd: (url: String, title: String?) -> String?,
-    onUpdate: (site: Site, url: String, title: String?) -> String?,
+    onAdd: (url: String, title: String?, limitMb: Int) -> String?,
+    onUpdate: (site: Site, url: String, title: String?, limitMb: Int) -> String?,
     onDelete: (Site, Boolean) -> Unit,
     onClearSiteCache: (Site, Boolean) -> Unit,
     onMeasureSiteCache: ((Site, (Long?) -> Unit) -> Unit)? = null,
     onReload: () -> Unit,
+    onRefreshSite: (Site) -> Unit,
     onHome: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -154,10 +156,18 @@ fun SitesDrawerContent(
         SiteEditorDialog(
             initial = editor,
             onDismiss = { editorOpen = false },
-            onSave = { url, title ->
+            onSave = { url, title, limit ->
                 val site = editor
-                if (site == null) onAdd(url, title) else onUpdate(site, url, title)
+                if (site == null) onAdd(url, title, limit) else onUpdate(site, url, title, limit)
             },
+            onRefresh = editor?.let { site ->
+                {
+                    editorOpen = false
+                    onRefreshSite(site)
+                }
+            },
+            refreshLabel = "Обновить страницу",
+            canRefresh = editor != null,
             onClearCache = editor?.let { site ->
                 {
                     editorOpen = false
@@ -354,16 +364,20 @@ private fun SiteCard(
 internal fun SiteEditorDialog(
     initial: Site?,
     onDismiss: () -> Unit,
-    onSave: (url: String, title: String?) -> String?,
+    onSave: (url: String, title: String?, limitMb: Int) -> String?,
     onClearCache: (() -> Unit)? = null,
     onClearAll: (() -> Unit)? = null,
     onMeasure: (((Long?) -> Unit) -> Unit)? = null,
     hiddenCount: Int = 0,
     onClearHidden: (() -> Unit)? = null,
+    onRefresh: (() -> Unit)? = null,
+    refreshLabel: String? = "Обновить страницу",
+    canRefresh: Boolean = true,
 ) {
     var url by rememberSaveable { mutableStateOf(initial?.url.orEmpty()) }
     var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
+    var limitMb by rememberSaveable { mutableStateOf(initial?.cacheLimitMb ?: 0) }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     var measuring by remember { mutableStateOf(onMeasure != null) }
 
@@ -418,6 +432,47 @@ internal fun SiteEditorDialog(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (onRefresh != null && refreshLabel != null && canRefresh) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Страница сайта", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Перезагрузить текущую страницу сайта.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = {
+                            onRefresh()
+                            onDismiss()
+                        }) { Text("Обновить") }
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Автоочистка кэша", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (limitMb == 0) {
+                            "Выключена: кэш сайта не чистится автоматически."
+                        } else {
+                            "Когда кэш сайта превысит $limitMb МБ, скачанные главы удалятся автоматически. Вход сохранится."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(listOf(0, 100), listOf(200, 500)).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                row.forEach { option ->
+                                    FilterChip(
+                                        selected = limitMb == option,
+                                        onClick = { limitMb = option },
+                                        label = { Text(if (option == 0) "Выкл" else "$option МБ") },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 if (onClearHidden != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -478,7 +533,7 @@ internal fun SiteEditorDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val problem = onSave(url.trim(), title.trim().ifBlank { null })
+                val problem = onSave(url.trim(), title.trim().ifBlank { null }, limitMb)
                 if (problem == null) onDismiss() else error = problem
             }) { Text(if (initial == null) "Добавить" else "Сохранить") }
         },

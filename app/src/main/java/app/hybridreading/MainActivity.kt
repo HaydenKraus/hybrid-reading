@@ -86,6 +86,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        UiState.resumeTick++
         ui.removeCallbacks(pauseTimers)
         WebHolder.resumeTimers()
         WebHolder.webView?.onResume()
@@ -97,6 +98,11 @@ class MainActivity : ComponentActivity() {
         WebHolder.webView?.let { ReadingState.remember(it, this) }
         // И то, где пользователь был: на главной странице или на сайте.
         ReadingState.saveHome(this, UiState.atHome)
+        // История чтения для домашней страницы: адрес, заголовок и сайт.
+        WebHolder.webView?.url?.takeIf { it.startsWith("http") }?.let { url ->
+            val siteId = SitesStore.active.value?.id.orEmpty()
+            ReadingState.rememberPage(this, url, UiState.pageTitle, siteId)
+        }
         Thread { runCatching { CookieManager.getInstance().flush() } }.start()
         WebHolder.webView?.onPause()
         // Короткие переходы (OAuth-попап, выбор файла) не рвём: таймеры гасим через 10 секунд в фоне.
@@ -127,6 +133,13 @@ class MainActivity : ComponentActivity() {
 object UiState {
     @Volatile
     var atHome: Boolean = false
+
+    /** Счётчик возвратов в приложение: по нему домашняя страница перечитывает историю чтения. */
+    var resumeTick by androidx.compose.runtime.mutableStateOf(0)
+
+    /** Заголовок открытой страницы — для списка «Продолжить чтение». */
+    @Volatile
+    var pageTitle: String = ""
 }
 
 @Composable
@@ -162,6 +175,14 @@ private fun AppRoot(
         }
     }
 
+    var loadRequest by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(loadRequest) {
+        val target = loadRequest ?: return@LaunchedEffect
+        withFrameNanos { }
+        WebHolder.webView?.loadUrl(target)
+        loadRequest = null
+    }
+
     // Внешняя ссылка: грузим после того, как WebView создан.
     LaunchedEffect(pendingUrl) {
         val target = pendingUrl ?: return@LaunchedEffect
@@ -179,7 +200,7 @@ private fun AppRoot(
                 startUrl = startUrl,
                 onOpenSites = { drawer = true },
                 onHome = { home = true },
-                onPageTitle = { },
+                onPageTitle = { UiState.pageTitle = it },
             )
         }
 
@@ -188,12 +209,21 @@ private fun AppRoot(
                 HomeScreen(
                     sites = sites,
                     activeId = site?.id,
+                    recents = remember(home, sites, UiState.resumeTick) {
+                        ReadingState.recentPages(context)
+                    },
+                    versionName = BuildConfig.VERSION_NAME,
                     onOpenSite = {
                         SitesStore.select(it.id)
                         home = false
                     },
-                    onAddSite = { url, title ->
-                        val error = SitesStore.add(url, title).exceptionOrNull()?.message
+                    onContinue = { recent ->
+                        sites.firstOrNull { it.id == recent.siteId }?.let { SitesStore.select(it.id) }
+                        home = false
+                        loadRequest = recent.url
+                    },
+                    onAddSite = { url, title, limit ->
+                        val error = SitesStore.add(url, title, limit).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт, чтобы не искать его в списке.
                         if (error == null) home = false
                         error
@@ -213,8 +243,8 @@ private fun AppRoot(
                         SitesStore.select(it.id)
                         drawer = false
                     },
-                    onAdd = { url, title ->
-                        val error = SitesStore.add(url, title).exceptionOrNull()?.message
+                    onAdd = { url, title, limit ->
+                        val error = SitesStore.add(url, title, limit).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт: меню закрываем, чтобы не искать его в списке.
                         if (error == null) {
                             drawer = false
@@ -222,8 +252,8 @@ private fun AppRoot(
                         }
                         error
                     },
-                    onUpdate = { target, url, title ->
-                        SitesStore.update(target.id, url, title).exceptionOrNull()?.message
+                    onUpdate = { target, url, title, limit ->
+                        SitesStore.update(target.id, url, title, limit).exceptionOrNull()?.message
                     },
                     onDelete = { target, wipeData ->
                         SitesStore.remove(target.id)
@@ -253,6 +283,12 @@ private fun AppRoot(
                     },
                     onReload = {
                         drawer = false
+                        reloadToken++
+                    },
+                    onRefreshSite = { target ->
+                        SitesStore.select(target.id)
+                        drawer = false
+                        home = false
                         reloadToken++
                     },
                     onHome = {

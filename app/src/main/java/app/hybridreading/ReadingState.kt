@@ -16,6 +16,8 @@ object ReadingState {
     private const val KEY_SCROLL = "scroll"
     private const val KEY_TIME = "time"
     private const val KEY_HOME = "was_home"
+    private const val KEY_RECENT = "recent"
+    private const val MAX_RECENT = 12
 
     /** Считаем позицию актуальной трое суток. */
     private const val MAX_AGE_MS = 3L * 24 * 60 * 60 * 1000
@@ -39,6 +41,50 @@ object ReadingState {
             val scroll = raw?.trim('"')?.toFloatOrNull() ?: 0f
             save(app, url, scroll)
         }
+    }
+
+    /** Страница, на которой пользователь остановился — для списка «Продолжить чтение». */
+    data class Recent(val url: String, val title: String, val siteId: String, val time: Long)
+
+    /** Дописывает страницу в историю чтения (последние 12, без дублей по адресу). */
+    fun rememberPage(context: Context, url: String, title: String, siteId: String) {
+        if (!url.startsWith("http")) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val current = prefs.getString(KEY_RECENT, null).orEmpty()
+        val lines = current.lineSequence().filter { it.isNotBlank() }.toMutableList()
+        val entry = listOf(url, title.replace('\t', ' ').replace('\n', ' '), siteId, System.currentTimeMillis().toString())
+            .joinToString("\t")
+        lines.removeAll { it.substringBefore('\t') == url }
+        lines.add(0, entry)
+        while (lines.size > MAX_RECENT) lines.removeAt(lines.size - 1)
+        prefs.edit().putString(KEY_RECENT, lines.joinToString("\n")).apply()
+    }
+
+    /** Свежие страницы для домашней страницы, новые сверху. */
+    fun recentPages(context: Context, limit: Int = 6): List<Recent> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_RECENT, null) ?: return emptyList()
+        val now = System.currentTimeMillis()
+        return raw.lineSequence()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split('\t')
+                if (parts.size < 4) return@mapNotNull null
+                val time = parts[3].toLongOrNull() ?: return@mapNotNull null
+                if (now - time > MAX_AGE_MS) return@mapNotNull null
+                Recent(parts[0], parts[1], parts[2], time)
+            }
+            .take(limit)
+            .toList()
+    }
+
+    fun forgetPage(context: Context, url: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val kept = prefs.getString(KEY_RECENT, null).orEmpty()
+            .lineSequence()
+            .filter { it.isNotBlank() && it.substringBefore('\t') != url }
+            .joinToString("\n")
+        prefs.edit().putString(KEY_RECENT, kept).apply()
     }
 
     /** Последняя страница, если запись свежая и относится к тому же сайту, что и [siteUrl]. */
