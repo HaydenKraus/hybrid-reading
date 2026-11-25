@@ -40,6 +40,8 @@ class MenuController(
     private val row = dp(ROW_DP)
     private val peek = dp(PEEK_DP)
     private val gap = dp(6)
+    private val handleWidth = dp(HANDLE_DP)
+    private val handleHeight = size + dp(28)
 
     private val root = FrameLayout(context)
     private val handler = Handler(Looper.getMainLooper())
@@ -59,6 +61,8 @@ class MenuController(
     private var rows: List<Row> = emptyList()
     private var mainParams: FrameLayout.LayoutParams? = null
     private var main: ImageButton? = null
+    private var handle: View? = null
+    private var handleParams: FrameLayout.LayoutParams? = null
     private var built = false
 
     private var onHome: () -> Unit = {}
@@ -167,12 +171,26 @@ class MenuController(
         val menuButton =
             actionButton(R.drawable.ic_dots, "Меню", BUTTON_DP).apply {
                 background = menuBackground()
-                elevation = dp(12).toFloat()
+                elevation = dp(10).toFloat()
                 setOnTouchListener(DragListener())
             }
         mainParams = FrameLayout.LayoutParams(size, size)
         root.addView(menuButton, mainParams)
         main = menuButton
+
+        // Широкая невидимая зона у края: спрятанную кнопку проще достать.
+        val touch =
+            View(context).apply {
+                isClickable = true
+                visibility = View.GONE
+                setOnClickListener {
+                    reveal()
+                    setExpanded(true)
+                }
+            }
+        handleParams = FrameLayout.LayoutParams(handleWidth, handleHeight)
+        root.addView(touch, handleParams)
+        handle = touch
 
         parent.addView(root)
         setExpanded(false)
@@ -223,6 +241,15 @@ class MenuController(
         }
         mainParams?.bottomMargin = bottomMargin
         main?.layoutParams = mainParams
+
+        handleParams?.let { params ->
+            params.gravity = Gravity.BOTTOM or if (leftSide) Gravity.START else Gravity.END
+            params.leftMargin = if (leftSide) 0 else 0
+            params.rightMargin = 0
+            params.bottomMargin = bottomMargin - (handleHeight - size) / 2
+            handle?.layoutParams = params
+            handle?.visibility = if (hidden) View.VISIBLE else View.GONE
+        }
         rows.forEachIndexed { index, item ->
             val params = item.params
             params.gravity = Gravity.BOTTOM or if (leftSide) Gravity.START else Gravity.END
@@ -366,9 +393,9 @@ class MenuController(
                     setStroke(dp(1), Color.argb(70, 255, 255, 255))
                 }
             contentDescription = description
-            val pad = dp(if (sizeDp <= BOOKMARK_DP) 4 else 15)
+            val pad = dp(if (sizeDp <= BOOKMARK_DP) 3 else 9)
             setPadding(pad, pad, pad, pad)
-            elevation = dp(8).toFloat()
+            elevation = dp(6).toFloat()
             layoutParams = FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp))
         }
 
@@ -415,10 +442,17 @@ class MenuController(
                         val leftPx = if (leftSide) edgeMargin else parent.width - size - edgeMargin
                         leftSide = leftPx + size / 2 < parent.width / 2
                         edgeMargin = if (leftSide) leftPx else parent.width - size - leftPx
-                        // Прилипаем к ближнему краю, но не прячемся сразу.
-                        slideTo(dp(8))
+                        if (edgeMargin < dp(SNAP_HIDE_DP)) {
+                            // Подвели к краю — убираем за край, оставляя полоску.
+                            hidden = true
+                            slideTo(-(size - peek))
+                            main?.animate()?.alpha(0.75f)?.setDuration(260)?.start()
+                        } else {
+                            slideTo(dp(8))
+                            scheduleHide()
+                        }
+                        apply()
                         save()
-                        scheduleHide()
                     } else if (event.actionMasked == MotionEvent.ACTION_UP) {
                         setExpanded(!expanded)
                     }
@@ -432,10 +466,12 @@ class MenuController(
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val BUTTON_DP = 56
-        private const val ROW_DP = 64
-        private const val BOOKMARK_DP = 28
-        private const val PEEK_DP = 12
+        private const val BUTTON_DP = 36
+        private const val ROW_DP = 46
+        private const val BOOKMARK_DP = 18
+        private const val PEEK_DP = 10
+        private const val HANDLE_DP = 44
+        private const val SNAP_HIDE_DP = 40
         private const val HIDE_DELAY = 4500L
         private const val PREFS = "menu_button_v2"
         private const val KEY_LEFT = "left"
