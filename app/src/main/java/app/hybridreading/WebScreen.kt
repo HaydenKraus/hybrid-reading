@@ -179,6 +179,40 @@ fun WebScreen(
     // поверх AndroidView не рисуется, а Popup на Android 16 не получает касания.
     val openSites by rememberUpdatedState(onOpenSites)
     val goHome by rememberUpdatedState(onHome)
+
+    // Панель режима выбора блока: подсказка и выход. Обычный View — Compose поверх AndroidView не рисуется.
+    val pickerBar = remember(generation) {
+        android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xF22E2A54.toInt())
+            setPadding(context.dp(16), context.dp(8), context.dp(4), context.dp(8))
+            addView(
+                android.widget.TextView(context).apply {
+                    text = "Выберите блок, который нужно скрыть"
+                    setTextColor(0xFFFFFFFF.toInt())
+                    textSize = 13f
+                },
+                android.widget.LinearLayout.LayoutParams(
+                    0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    1f,
+                ),
+            )
+            addView(
+                android.widget.Button(context).apply {
+                    text = "Отмена"
+                    setOnClickListener { engine.stopPicker() }
+                },
+                android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            visibility = View.GONE
+        }
+    }
+
     val container = remember(generation) {
         FrameLayout(context).apply {
             addView(
@@ -195,6 +229,13 @@ fun WebScreen(
                     onHide = { engine.startPicker() },
                 )
             }
+            addView(
+                pickerBar,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { topMargin = context.dp(8) },
+            )
             // Позицию кнопки восстанавливаем, когда контейнер уже измерился.
             post { menu.restore() }
         }
@@ -202,6 +243,9 @@ fun WebScreen(
 
     SideEffect {
         // Свежие значения из композиции — обычные поля, чтобы не пересобирать WebView.
+        engine.onPicking = { picking ->
+            pickerBar.visibility = if (picking) View.VISIBLE else View.GONE
+        }
         engine.site = site
         engine.onTitle = onPageTitle
         engine.permissionHandler = { request ->
@@ -395,6 +439,11 @@ private class WebEngineState(private val context: Context) {
 
     var onTitle: (String) -> Unit = {}
 
+    /** Режим выбора включён; переживает переходы по страницам. */
+    var picking: Boolean = false
+
+    var onPicking: (Boolean) -> Unit = {}
+
     var loading by mutableStateOf(false)
         private set
 
@@ -462,21 +511,37 @@ private class WebEngineState(private val context: Context) {
     /** Приём выбранного блока из JS: селектор сохраняем и сразу прячем. */
     private inner class PickerBridge {
         @JavascriptInterface
-        fun onPicked(selector: String) {
+        fun onPicked(selector: String, label: String) {
             val target = site ?: return
             Handler(Looper.getMainLooper()).post {
                 if (selector.isBlank()) {
                     Toast.makeText(context, "Блок не выбран", Toast.LENGTH_SHORT).show()
                     return@post
                 }
-                if (HiddenBlocks.add(context, target.id, selector)) {
-                    applyHiddenBlocks(main)
+                confirmHide(target.id, selector, label)
+            }
+        }
+    }
+
+    /** Подтверждение: режим выбора при этом не заканчивается. */
+    private fun confirmHide(siteId: String, selector: String, label: String) {
+        val view = main ?: return
+        android.app.AlertDialog.Builder(context)
+            .setTitle("Скрыть этот блок?")
+            .setMessage(label.ifBlank { selector })
+            .setPositiveButton("Скрыть") { _, _ ->
+                if (HiddenBlocks.add(context, siteId, selector)) {
+                    applyHiddenBlocks(view)
+                    view.evaluateJavascript(PICK_CLEAR_JS, null)
                     Toast.makeText(context, "Блок скрыт на этом сайте", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Этот блок уже скрыт", Toast.LENGTH_SHORT).show()
                 }
             }
-        }
+            .setNegativeButton("Отмена") { _, _ ->
+                view.evaluateJavascript(PICK_CLEAR_JS, null)
+            }
+            .show()
     }
 
     /** Прячет сохранённые блоки сайта на загруженной странице. */
@@ -487,11 +552,19 @@ private class WebEngineState(private val context: Context) {
         runCatching { view?.evaluateJavascript(js, null) }
     }
 
-    /** Режим выбора: следующее касание страницы подсветит блок и спрячет его. */
+    /** Режим выбора блока: касание подсвечивает элемент и спрашивает подтверждение. */
     fun startPicker() {
         val view = main ?: return
-        Toast.makeText(context, "Коснитесь блока, который нужно скрыть", Toast.LENGTH_LONG).show()
+        picking = true
+        onPicking(true)
         runCatching { view.evaluateJavascript(PICK_JS, null) }
+        Toast.makeText(context, "Коснитесь блока, который нужно скрыть", Toast.LENGTH_SHORT).show()
+    }
+
+    fun stopPicker() {
+        picking = false
+        onPicking(false)
+        runCatching { main?.evaluateJavascript(STOP_PICK_JS, null) }
     }
 
     fun createMain(): WebView {
@@ -576,6 +649,7 @@ private class WebEngineState(private val context: Context) {
             }
             if (url != null && isWebUrl(url)) {
                 applyHiddenBlocks(view)
+                if (picking) view.evaluateJavascript(PICK_JS, null)
             }
             if (url != null) {
                 takeScrollFor(url)?.let { y ->
@@ -948,11 +1022,10 @@ private const val SMOOTH_JS = """
     var style = document.createElement('style');
     style.textContent =
       'html{scroll-behavior:smooth!important}' +
-      'html,body{-webkit-overflow-scrolling:touch;overscroll-behavior:none;' +
-      'overflow-x:hidden!important;max-width:100vw}' +
-      'img,video,canvas,svg{max-width:100%!important;height:auto}' +
+      'html,body{overscroll-behavior:none}' +
+      'img,video,canvas{max-width:100%!important;height:auto}' +
       'pre,table{max-width:100%;overflow-x:auto}' +
-      'body{word-break:break-word}';
+      'body{overflow-x:clip;word-break:break-word}';
     (document.head || document.documentElement).appendChild(style);
   } catch (e) {}
 })();
@@ -975,69 +1048,103 @@ private fun hiddenCssJs(css: String): String =
         "s.textContent=" + jsQuote(css) + ";})();"
 
 /**
- * Выбор блока: подсвечиваем элемент под пальцем, по касанию отдаём селектор в Kotlin.
- * Селектор короткий — id, если он есть, иначе до четырёх уровней тег.класс(:nth-of-type).
+ * Выбор блока: подсвечиваем элемент рамкой, отдаём селектор и описание в Kotlin и ждём решения.
+ * Режим сам не выключается — пока пользователь не нажмёт «Отмена» в панели.
  */
 private const val PICK_JS = """
 (function () {
   if (window.__inkPicker) { return; }
   window.__inkPicker = true;
-  var marker = document.createElement('div');
-  marker.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;' +
-    'background:rgba(124,92,255,.35);border:2px solid #7c5cff;border-radius:4px;';
-  (document.head || document.documentElement).appendChild(marker);
+  window.__inkSel = null;
 
+  // Короткий и устойчивый селектор: якорные атрибуты, иначе путь тег:nth-of-type.
+  // Классы не используем: у современных сайтов их десятки на элемент, и такой селектор не совпадает.
   function selectorFor(el) {
+    if (!el || el.nodeType !== 1) { return ''; }
+    var anchors = ['data-testid', 'data-test', 'itemprop', 'aria-label', 'name'];
+    for (var a = 0; a < anchors.length; a++) {
+      var value = el.getAttribute && el.getAttribute(anchors[a]);
+      if (value && value.length < 40) {
+        return el.tagName.toLowerCase() + '[' + anchors[a] + '="' + value.replace(/"/g, '') + '"]';
+      }
+    }
+    if (el.id && el.id.length < 40) { return '#' + CSS.escape(el.id); }
     var parts = [];
     var node = el;
-    for (var depth = 0; depth < 4 && node && node.nodeType === 1; depth++) {
-      if (node === document.body || node === document.documentElement) { break; }
-      if (node.id) { parts.unshift('#' + CSS.escape(node.id)); return parts.join(' > '); }
-      var part = node.tagName.toLowerCase();
-      var cls = (typeof node.className === 'string' ? node.className : '').trim().split(/\s+/);
-      for (var i = 0; i < cls.length && i < 2; i++) {
-        if (cls[i]) { part += '.' + CSS.escape(cls[i]); }
-      }
+    var depth = 0;
+    while (node && node.nodeType === 1 && depth < 6 && node !== document.body) {
+      var index = 1;
       var parent = node.parentElement;
       if (parent) {
         var same = [];
         for (var k = 0; k < parent.children.length; k++) {
           if (parent.children[k].tagName === node.tagName) { same.push(parent.children[k]); }
         }
-        if (same.length > 1) { part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')'; }
+        index = same.indexOf(node) + 1;
       }
-      parts.unshift(part);
+      parts.unshift(node.tagName.toLowerCase() + ':nth-of-type(' + index + ')');
       node = parent;
+      depth++;
     }
     return parts.join(' > ');
   }
 
-  function highlight(e) {
-    var el = e.target;
-    if (!el || !el.getBoundingClientRect) { return; }
-    var r = el.getBoundingClientRect();
-    marker.style.left = r.left + 'px';
-    marker.style.top = r.top + 'px';
-    marker.style.width = r.width + 'px';
-    marker.style.height = r.height + 'px';
+  function describe(el) {
+    if (!el) { return ''; }
+    var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    var tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (text.length > 0) { return tag + ': ' + text.slice(0, 40); }
+    return tag + (el.className ? '.' + String(el.className).split(' ')[0] : '');
   }
 
-  function finish() {
-    document.removeEventListener('mousemove', highlight, true);
-    document.removeEventListener('click', pick, true);
-    if (marker.parentNode) { marker.parentNode.removeChild(marker); }
-    window.__inkPicker = false;
+  function paint(el) {
+    clearPaint();
+    if (!el || !el.style) { return; }
+    window.__inkSel = { el: el, outline: el.style.outline, offset: el.style.outlineOffset };
+    el.style.outline = '2px solid #7c5cff';
+    el.style.outlineOffset = '-2px';
   }
 
-  function pick(e) {
+  function clearPaint() {
+    var saved = window.__inkSel;
+    if (!saved || !saved.el) { return; }
+    saved.el.style.outline = saved.outline || '';
+    saved.el.style.outlineOffset = saved.offset || '';
+    window.__inkSel = null;
+  }
+
+  window.__inkClearSel = clearPaint;
+
+  function onMove(e) { paint(e.target); }
+  function onTouch(e) { paint(e.target); }
+  function onClick(e) {
     e.preventDefault();
     e.stopPropagation();
-    var selector = e.target ? selectorFor(e.target) : '';
-    finish();
-    try { InkPicker.onPicked(selector); } catch (err) {}
+    var el = e.target;
+    paint(el);
+    try { InkPicker.onPicked(selectorFor(el), describe(el)); } catch (err) {}
   }
 
-  document.addEventListener('mousemove', highlight, true);
-  document.addEventListener('click', pick, true);
+  document.addEventListener('mousemove', onMove, true);
+  document.addEventListener('touchstart', onTouch, true);
+  document.addEventListener('click', onClick, true);
+
+  window.__inkPickStop = function () {
+    document.removeEventListener('mousemove', onMove, true);
+    document.removeEventListener('touchstart', onTouch, true);
+    document.removeEventListener('click', onClick, true);
+    clearPaint();
+    window.__inkPicker = false;
+  };
 })();
+"""
+
+/** Снять подсветку с выбранного блока (пользователь отказался скрывать). */
+private const val PICK_CLEAR_JS = """
+(function () { if (window.__inkClearSel) { window.__inkClearSel(); } })();
+"""
+
+/** Выйти из режима выбора. */
+private const val STOP_PICK_JS = """
+(function () { if (window.__inkPickStop) { window.__inkPickStop(); } })();
 """

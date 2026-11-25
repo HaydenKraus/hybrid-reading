@@ -31,10 +31,10 @@ class MenuController(
         layoutParams = FrameLayout.LayoutParams(size, totalHeight)
     }
 
-    private val main = button(R.drawable.ic_menu, "Меню", 0xFF2E2A54.toInt())
+    private val main = button(R.drawable.ic_dots, "Меню", 0xFF2E2A54.toInt())
     private val actions = listOf(
         button(R.drawable.ic_home, "Главная", 0xFF3A3566.toInt()),
-        button(R.drawable.ic_list, "Сайты", 0xFF3A3566.toInt()),
+        button(R.drawable.ic_globe, "Сайты", 0xFF3A3566.toInt()),
         button(R.drawable.ic_hide, "Удалить блок с сайта", 0xFF3A3566.toInt()),
     )
 
