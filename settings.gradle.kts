@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "InkStory"
+rootProject.name = "HybridReading"
 include(":app")
