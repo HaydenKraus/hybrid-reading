@@ -12,11 +12,13 @@ import android.os.Looper
 import android.os.Message
 import android.view.Gravity
 import android.view.View
+import android.widget.Toast
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
+import android.webkit.JavascriptInterface
 import android.webkit.JsPromptResult
 import android.webkit.JsResult
 import android.webkit.PermissionRequest
@@ -145,11 +147,11 @@ private const val USER_AGENT =
 @Composable
 fun WebScreen(
     site: Site,
-    adBlock: Boolean,
     active: Boolean,
     reloadToken: Int,
     startUrl: String?,
-    onOpenDrawer: () -> Unit,
+    onOpenSites: () -> Unit,
+    onHome: () -> Unit,
     onPageTitle: (String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -175,29 +177,32 @@ fun WebScreen(
 
     // Кнопка меню — обычный View поверх WebView в том же контейнере: Compose-оверлей
     // поверх AndroidView не рисуется, а Popup на Android 16 не получает касания.
+    val openSites by rememberUpdatedState(onOpenSites)
+    val goHome by rememberUpdatedState(onHome)
     val container = remember(generation) {
         FrameLayout(context).apply {
-            addView(webView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(
-                createMenuButton(context),
-                FrameLayout.LayoutParams(context.dp(56), context.dp(56), Gravity.BOTTOM or Gravity.END).apply {
-                    setMargins(0, 0, context.dp(16), context.dp(24))
-                },
+                webView,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
             )
+            val menu = MenuController(context, this).apply {
+                bind(
+                    onHome = { goHome() },
+                    onSites = { openSites() },
+                    onHide = { engine.startPicker() },
+                )
+            }
+            // Позицию кнопки восстанавливаем, когда контейнер уже измерился.
+            post { menu.restore() }
         }
-    }
-    val openDrawer by rememberUpdatedState(onOpenDrawer)
-    DisposableEffect(container) {
-        val fab = container.getChildAt(1) as? ImageButton
-        fab?.setOnClickListener { openDrawer() }
-        onDispose { fab?.setOnClickListener(null) }
     }
 
     SideEffect {
         // Свежие значения из композиции — обычные поля, чтобы не пересобирать WebView.
-        engine.adBlock = adBlock
         engine.site = site
-        engine.siteHost = UrlTools.host(site.url)
         engine.onTitle = onPageTitle
         engine.permissionHandler = { request ->
             val needed = requiredPermissions(request)
@@ -385,16 +390,8 @@ fun WebScreen(
 @SuppressLint("SetJavaScriptEnabled")
 private class WebEngineState(private val context: Context) {
 
-    /** Читается из фонового потока shouldInterceptRequest, поэтому volatile. */
-    @Volatile
-    var adBlock: Boolean = true
-
     @Volatile
     var site: Site? = null
-
-    /** Хост активного сайта: его собственные запросы блокировщик не трогает. */
-    @Volatile
-    var siteHost: String? = null
 
     var onTitle: (String) -> Unit = {}
 
@@ -462,9 +459,45 @@ private class WebEngineState(private val context: Context) {
         }
     }
 
+    /** Приём выбранного блока из JS: селектор сохраняем и сразу прячем. */
+    private inner class PickerBridge {
+        @JavascriptInterface
+        fun onPicked(selector: String) {
+            val target = site ?: return
+            Handler(Looper.getMainLooper()).post {
+                if (selector.isBlank()) {
+                    Toast.makeText(context, "Блок не выбран", Toast.LENGTH_SHORT).show()
+                    return@post
+                }
+                if (HiddenBlocks.add(context, target.id, selector)) {
+                    applyHiddenBlocks(main)
+                    Toast.makeText(context, "Блок скрыт на этом сайте", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Этот блок уже скрыт", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    /** Прячет сохранённые блоки сайта на загруженной странице. */
+    fun applyHiddenBlocks(view: WebView?) {
+        val target = site ?: return
+        val css = HiddenBlocks.css(context, target.id)
+        val js = if (css.isEmpty()) hiddenCssJs("") else hiddenCssJs(css)
+        runCatching { view?.evaluateJavascript(js, null) }
+    }
+
+    /** Режим выбора: следующее касание страницы подсветит блок и спрячет его. */
+    fun startPicker() {
+        val view = main ?: return
+        Toast.makeText(context, "Коснитесь блока, который нужно скрыть", Toast.LENGTH_LONG).show()
+        runCatching { view.evaluateJavascript(PICK_JS, null) }
+    }
+
     fun createMain(): WebView {
         val view = WebView(context)
         applySettings(view)
+        view.addJavascriptInterface(PickerBridge(), "InkPicker")
         view.webViewClient = buildClient()
         view.webChromeClient = buildChrome()
         main = view
@@ -475,7 +508,8 @@ private class WebEngineState(private val context: Context) {
     fun applySettings(view: WebView) {
         view.setBackgroundColor(0xFF101014.toInt())
         // Плавное пролистывание: страница растеризуется заранее, бары не перерисовываются на ходу.
-        view.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        // Резиновый отскок в сторону убираем совсем: при чтении он дёргает страницу по горизонтали.
+        view.overScrollMode = View.OVER_SCROLL_NEVER
         view.isHorizontalScrollBarEnabled = false
         view.isVerticalScrollBarEnabled = true
         view.scrollBarStyle = WebView.SCROLLBARS_INSIDE_OVERLAY
@@ -506,18 +540,6 @@ private class WebEngineState(private val context: Context) {
     }
 
     private fun buildClient(): WebViewClient = object : WebViewClient() {
-
-        override fun shouldInterceptRequest(
-            view: WebView,
-            request: WebResourceRequest,
-        ): WebResourceResponse? {
-            if (!adBlock) return null
-            // Главный фрейм не блокируем никогда: иначе рекламный редирект даёт пустую страницу.
-            if (request.isForMainFrame) return null
-            val url = request.url.toString()
-            if (!AdBlocker.shouldBlock(url, siteHost)) return null
-            return AdBlocker.emptyResponse(AdBlocker.mimeFor(url))
-        }
 
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val uri = request.url ?: return false
@@ -552,8 +574,8 @@ private class WebEngineState(private val context: Context) {
                 // Постоянное хранилище: иначе браузер вправе вытеснить скачанные сайтом главы.
                 view.evaluateJavascript(PERSIST_JS, null)
             }
-            if (adBlock && url != null && isWebUrl(url)) {
-                view.evaluateJavascript(cosmeticJs(hostOf(url).orEmpty()), null)
+            if (url != null && isWebUrl(url)) {
+                applyHiddenBlocks(view)
             }
             if (url != null) {
                 takeScrollFor(url)?.let { y ->
@@ -858,18 +880,6 @@ private fun JsDialogUi(dialog: JsDialogRequest, onDone: () -> Unit) {
 }
 
 /** Круглая кнопка меню в стиле темы: обычный View внутри контейнера WebView, поэтому касания доходят всегда. */
-private fun createMenuButton(context: Context): ImageButton = ImageButton(context).apply {
-    setImageResource(R.drawable.ic_menu)
-    background = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(0xFF2E2A54.toInt())
-    }
-    contentDescription = "Сайты"
-    val pad = context.dp(16)
-    setPadding(pad, pad, pad, pad)
-    elevation = context.dp(6).toFloat()
-}
-
 private fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
 /** Схемы, которые отдаём другим приложениям. Остальные (file:, javascript:, content:) игнорируем. */
@@ -928,7 +938,6 @@ private fun sameUrl(a: String?, b: String?): Boolean {
 private fun jsQuote(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-private fun cosmeticJs(host: String): String = COSMETIC_JS.replace("@HOST@", jsQuote(host))
 
 /** Плавная прокрутка: якорные переходы и скролл внутри контейнеров идут без рывков. */
 private const val SMOOTH_JS = """
@@ -937,8 +946,13 @@ private const val SMOOTH_JS = """
     if (window.__inkSmooth) { return; }
     window.__inkSmooth = true;
     var style = document.createElement('style');
-    style.textContent = 'html{scroll-behavior:smooth!important}' +
-      'html,body{-webkit-overflow-scrolling:touch;overscroll-behavior-y:none}';
+    style.textContent =
+      'html{scroll-behavior:smooth!important}' +
+      'html,body{-webkit-overflow-scrolling:touch;overscroll-behavior:none;' +
+      'overflow-x:hidden!important;max-width:100vw}' +
+      'img,video,canvas,svg{max-width:100%!important;height:auto}' +
+      'pre,table{max-width:100%;overflow-x:auto}' +
+      'body{word-break:break-word}';
     (document.head || document.documentElement).appendChild(style);
   } catch (e) {}
 })();
@@ -953,51 +967,77 @@ private const val PERSIST_JS = """
 })();
 """
 
+/** Прячет все сохранённые блоки: одна таблица стилей на страницу. */
+private fun hiddenCssJs(css: String): String =
+    "(function(){var s=document.getElementById('ink-hidden');" +
+        "if(!s){s=document.createElement('style');s.id='ink-hidden';" +
+        "(document.head||document.documentElement).appendChild(s);}" +
+        "s.textContent=" + jsQuote(css) + ";})();"
+
 /**
- * Косметическая фильтрация: прячет контейнеры рекламы и пустые слоты.
- * MutationObserver глушим через 15 секунд, чтобы не гонять DOM на тяжёлых страницах.
+ * Выбор блока: подсвечиваем элемент под пальцем, по касанию отдаём селектор в Kotlin.
+ * Селектор короткий — id, если он есть, иначе до четырёх уровней тег.класс(:nth-of-type).
  */
-private const val COSMETIC_JS = """
-(function (host) {
-  try {
-    if (window.__inkCosmetic) { return; }
-    window.__inkCosmetic = true;
+private const val PICK_JS = """
+(function () {
+  if (window.__inkPicker) { return; }
+  window.__inkPicker = true;
+  var marker = document.createElement('div');
+  marker.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;' +
+    'background:rgba(124,92,255,.35);border:2px solid #7c5cff;border-radius:4px;';
+  (document.head || document.documentElement).appendChild(marker);
 
-    var css = 'ins,.adsbygoogle,[id^=yandex_rtb],[class*=advert],[id*=adfox],'
-      + 'iframe[src*=yandex],iframe[src*=doubleclick],[class*=banner],[id*=banner],'
-      + '[data-ad],[class*=promo-block]{display:none!important}';
-    var style = document.createElement('style');
-    style.type = 'text/css';
-    style.appendChild(document.createTextNode(css));
-    (document.head || document.documentElement).appendChild(style);
-
-    function tidy() {
-      var nodes = document.querySelectorAll('div, section, aside');
-      for (var i = 0; i < nodes.length; i++) {
-        var node = nodes[i];
-        if (node.childElementCount > 2) { continue; }
-        var text = (node.textContent || '').trim();
-        if (text.length > 40 || text.indexOf('Тут должна быть реклама') < 0) { continue; }
-        var box = node;
-        for (var k = 0; k < 3 && box.parentElement; k++) {
-          if (box.parentElement.getBoundingClientRect().height > 400) { break; }
-          box = box.parentElement;
-        }
-        box.style.display = 'none';
+  function selectorFor(el) {
+    var parts = [];
+    var node = el;
+    for (var depth = 0; depth < 4 && node && node.nodeType === 1; depth++) {
+      if (node === document.body || node === document.documentElement) { break; }
+      if (node.id) { parts.unshift('#' + CSS.escape(node.id)); return parts.join(' > '); }
+      var part = node.tagName.toLowerCase();
+      var cls = (typeof node.className === 'string' ? node.className : '').trim().split(/\s+/);
+      for (var i = 0; i < cls.length && i < 2; i++) {
+        if (cls[i]) { part += '.' + CSS.escape(cls[i]); }
       }
+      var parent = node.parentElement;
+      if (parent) {
+        var same = [];
+        for (var k = 0; k < parent.children.length; k++) {
+          if (parent.children[k].tagName === node.tagName) { same.push(parent.children[k]); }
+        }
+        if (same.length > 1) { part += ':nth-of-type(' + (same.indexOf(node) + 1) + ')'; }
+      }
+      parts.unshift(part);
+      node = parent;
     }
+    return parts.join(' > ');
+  }
 
-    var pending = 0;
-    function schedule() {
-      if (pending) { return; }
-      pending = setTimeout(function () { pending = 0; tidy(); }, 300);
-    }
+  function highlight(e) {
+    var el = e.target;
+    if (!el || !el.getBoundingClientRect) { return; }
+    var r = el.getBoundingClientRect();
+    marker.style.left = r.left + 'px';
+    marker.style.top = r.top + 'px';
+    marker.style.width = r.width + 'px';
+    marker.style.height = r.height + 'px';
+  }
 
-    setTimeout(tidy, 400);
-    setTimeout(tidy, 1500);
-    var observer = new MutationObserver(schedule);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    setTimeout(function () { observer.disconnect(); }, 15000);
-  } catch (e) {}
-})(@HOST@);
+  function finish() {
+    document.removeEventListener('mousemove', highlight, true);
+    document.removeEventListener('click', pick, true);
+    if (marker.parentNode) { marker.parentNode.removeChild(marker); }
+    window.__inkPicker = false;
+  }
+
+  function pick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var selector = e.target ? selectorFor(e.target) : '';
+    finish();
+    try { InkPicker.onPicked(selector); } catch (err) {}
+  }
+
+  document.addEventListener('mousemove', highlight, true);
+  document.addEventListener('click', pick, true);
+})();
 """

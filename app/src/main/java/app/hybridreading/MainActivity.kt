@@ -174,11 +174,11 @@ private fun AppRoot(
         site?.let { current ->
             WebScreen(
                 site = current,
-                adBlock = current.adBlock,
                 active = !drawer && !home,
                 reloadToken = reloadToken,
                 startUrl = startUrl,
-                onOpenDrawer = { drawer = true },
+                onOpenSites = { drawer = true },
+                onHome = { home = true },
                 onPageTitle = { },
             )
         }
@@ -192,8 +192,8 @@ private fun AppRoot(
                         SitesStore.select(it.id)
                         home = false
                     },
-                    onAddSite = { url, title, adBlock ->
-                        val error = SitesStore.add(url, title, adBlock).exceptionOrNull()?.message
+                    onAddSite = { url, title ->
+                        val error = SitesStore.add(url, title).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт, чтобы не искать его в списке.
                         if (error == null) home = false
                         error
@@ -213,8 +213,8 @@ private fun AppRoot(
                         SitesStore.select(it.id)
                         drawer = false
                     },
-                    onAdd = { url, title, adBlock ->
-                        val error = SitesStore.add(url, title, adBlock).exceptionOrNull()?.message
+                    onAdd = { url, title ->
+                        val error = SitesStore.add(url, title).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт: меню закрываем, чтобы не искать его в списке.
                         if (error == null) {
                             drawer = false
@@ -222,8 +222,8 @@ private fun AppRoot(
                         }
                         error
                     },
-                    onUpdate = { target, url, title, adBlock ->
-                        SitesStore.update(target.id, url, title, adBlock).exceptionOrNull()?.message
+                    onUpdate = { target, url, title ->
+                        SitesStore.update(target.id, url, title).exceptionOrNull()?.message
                     },
                     onDelete = { target, wipeData ->
                         SitesStore.remove(target.id)

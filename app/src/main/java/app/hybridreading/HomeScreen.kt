@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,7 +45,7 @@ fun HomeScreen(
     sites: List<Site>,
     activeId: String?,
     onOpenSite: (Site) -> Unit,
-    onAddSite: (url: String, title: String?, adBlock: Boolean) -> String?,
+    onAddSite: (url: String, title: String?) -> String?,
     onMenu: () -> Unit,
 ) {
     var addOpen by remember { mutableStateOf(false) }
@@ -142,19 +143,21 @@ fun HomeScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Text(
-                            if (site.adBlock) "без рекламы" else "с рекламой",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (site.adBlock) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        val hidden = HiddenBlocks.count(LocalContext.current, site.id)
+                        if (hidden > 0) {
+                            Text(
+                                "скрыто блоков: $hidden",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 }
             }
 
             item("hint") {
                 Text(
-                    "Долгое нажатие на сайт в меню — правка названия, ссылки и рекламы.",
+                    "Долгое нажатие на сайт в меню — правка названия, ссылки и скрытых блоков.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
@@ -167,7 +170,7 @@ fun HomeScreen(
         SiteEditorDialog(
             initial = null,
             onDismiss = { addOpen = false },
-            onSave = { url, title, adBlock -> onAddSite(url, title, adBlock) },
+            onSave = { url, title -> onAddSite(url, title) },
         )
     }
 }

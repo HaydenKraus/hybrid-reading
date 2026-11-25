@@ -10,8 +10,6 @@ data class Site(
     val id: String,
     val title: String,
     val url: String,
-    /** Блокировать рекламу именно на этом сайте. */
-    val adBlock: Boolean = true,
 )
 
 /**
@@ -52,13 +50,13 @@ object SitesStore {
         prefs?.edit()?.putString(KEY_ACTIVE, id)?.apply()
     }
 
-    fun add(rawUrl: String, rawTitle: String?, adBlock: Boolean = true): Result<Site> {
+    fun add(rawUrl: String, rawTitle: String?): Result<Site> {
         val url = UrlTools.normalize(rawUrl)
             ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
         val id = UrlTools.idFor(url)
             ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
         val title = rawTitle?.trim()?.ifBlank { null } ?: UrlTools.titleFor(url)
-        val site = Site(id, title, url, adBlock)
+        val site = Site(id, title, url)
         val current = _sites.value
         val updated = if (current.any { it.id == id }) {
             current.map { if (it.id == id) site else it }
@@ -73,7 +71,7 @@ object SitesStore {
      * Правка сайта: название, ссылка и блокировка рекламы.
      * Смена домена меняет id, поэтому занятый адрес отклоняется с понятной ошибкой.
      */
-    fun update(id: String, rawUrl: String, rawTitle: String?, adBlock: Boolean): Result<Site> {
+    fun update(id: String, rawUrl: String, rawTitle: String?): Result<Site> {
         val current = _sites.value
         val existing = current.firstOrNull { it.id == id }
             ?: return Result.failure(IllegalArgumentException("Сайт не найден"))
@@ -85,7 +83,7 @@ object SitesStore {
             return Result.failure(IllegalArgumentException("Такой сайт уже добавлен"))
         }
         val title = rawTitle?.trim()?.ifBlank { null } ?: UrlTools.titleFor(url)
-        val site = Site(newId, title, url, adBlock)
+        val site = Site(newId, title, url)
         publish(current.map { if (it.id == id) site else it }, if (_active.value?.id == id) newId else _active.value?.id)
         return Result.success(site)
     }
@@ -113,7 +111,7 @@ object SitesStore {
 
 // --- Чистые функции разбора/сериализации: без SharedPreferences, тестируются на JVM ---
 
-private data class RawSite(val id: String, val title: String, val url: String, val adBlock: Boolean?)
+private data class RawSite(val id: String, val title: String, val url: String)
 
 /** Пустой/битый json -> пустой список; дубликаты по id отбрасываются, порядок сохраняется. */
 internal fun decodeSites(raw: String?): List<Site> {
@@ -127,14 +125,13 @@ internal fun decodeSites(raw: String?): List<Site> {
             id = id,
             title = entry.title.trim().ifBlank { UrlTools.titleFor(url) },
             url = url,
-            adBlock = entry.adBlock ?: true,
         )
     }
     return result.values.toList()
 }
 
 internal fun encodeSites(list: List<Site>): String = list.joinToString(",", "[", "]") { site ->
-    "{\"id\":${quoted(site.id)},\"title\":${quoted(site.title)},\"url\":${quoted(site.url)},\"adblock\":${site.adBlock}}"
+    "{\"id\":${quoted(site.id)},\"title\":${quoted(site.title)},\"url\":${quoted(site.url)}}"
 }
 
 private fun quoted(value: String): String = buildString(value.length + 2) {
@@ -162,7 +159,6 @@ private fun parseSiteArray(raw: String): List<RawSite>? {
             id = obj["id"].orEmpty(),
             title = obj["title"].orEmpty(),
             url = obj["url"].orEmpty(),
-            adBlock = obj["adblock"]?.toBooleanStrictOrNull(),
         )
         if (cursor.take(',')) continue
         if (cursor.take(']')) return list

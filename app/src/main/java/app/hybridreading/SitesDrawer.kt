@@ -46,6 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,8 +61,8 @@ fun SitesDrawerContent(
     sites: List<Site>,
     activeId: String?,
     onSelect: (Site) -> Unit,
-    onAdd: (url: String, title: String?, adBlock: Boolean) -> String?,
-    onUpdate: (site: Site, url: String, title: String?, adBlock: Boolean) -> String?,
+    onAdd: (url: String, title: String?) -> String?,
+    onUpdate: (site: Site, url: String, title: String?) -> String?,
     onDelete: (Site, Boolean) -> Unit,
     onClearSiteCache: (Site, Boolean) -> Unit,
     onMeasureSiteCache: ((Site, (Long?) -> Unit) -> Unit)? = null,
@@ -73,6 +74,9 @@ fun SitesDrawerContent(
     var editorOpen by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Site?>(null) }
     var pendingCache by remember { mutableStateOf<Pair<Site, Boolean>?>(null) }
+    val context = LocalContext.current
+    // Пересчитывать счётчик скрытых блоков после «Вернуть».
+    var hiddenVersion by remember { mutableStateOf(0) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -123,6 +127,9 @@ fun SitesDrawerContent(
             items(sites, key = { it.id }) { site ->
                 SiteCard(
                     site = site,
+                    hiddenCount = remember(site.id, hiddenVersion) {
+                        HiddenBlocks.count(context, site.id)
+                    },
                     active = site.id == activeId,
                     onSelect = { onSelect(site) },
                     onEdit = {
@@ -134,7 +141,7 @@ fun SitesDrawerContent(
             }
             item("hint") {
                 Text(
-                    "Долгое нажатие на сайт — правка названия, ссылки и рекламы.",
+                    "Долгое нажатие на сайт — правка названия, ссылки и скрытых блоков.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
@@ -147,9 +154,9 @@ fun SitesDrawerContent(
         SiteEditorDialog(
             initial = editor,
             onDismiss = { editorOpen = false },
-            onSave = { url, title, adBlock ->
+            onSave = { url, title ->
                 val site = editor
-                if (site == null) onAdd(url, title, adBlock) else onUpdate(site, url, title, adBlock)
+                if (site == null) onAdd(url, title) else onUpdate(site, url, title)
             },
             onClearCache = editor?.let { site ->
                 {
@@ -165,6 +172,16 @@ fun SitesDrawerContent(
             },
             onMeasure = editor?.let { site ->
                 { callback: (Long?) -> Unit -> onMeasureSiteCache?.invoke(site, callback) }
+            },
+            hiddenCount = editor?.let {
+                remember(it.id, hiddenVersion) { HiddenBlocks.count(context, it.id) }
+            } ?: 0,
+            onClearHidden = editor?.let { site ->
+                {
+                    HiddenBlocks.clear(context, site.id)
+                    hiddenVersion++
+                    editorOpen = false
+                }
             },
         )
     }
@@ -272,6 +289,7 @@ private fun HomeEntryCard(onClick: () -> Unit) {
 @Composable
 private fun SiteCard(
     site: Site,
+    hiddenCount: Int,
     active: Boolean,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
@@ -305,12 +323,13 @@ private fun SiteCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = if (site.adBlock) "реклама выключена" else "реклама включена",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (site.adBlock) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (hiddenCount > 0) {
+                    Text(
+                        text = "скрыто блоков: $hiddenCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             if (active) {
                 Icon(
@@ -335,14 +354,15 @@ private fun SiteCard(
 internal fun SiteEditorDialog(
     initial: Site?,
     onDismiss: () -> Unit,
-    onSave: (url: String, title: String?, adBlock: Boolean) -> String?,
+    onSave: (url: String, title: String?) -> String?,
     onClearCache: (() -> Unit)? = null,
     onClearAll: (() -> Unit)? = null,
     onMeasure: (((Long?) -> Unit) -> Unit)? = null,
+    hiddenCount: Int = 0,
+    onClearHidden: (() -> Unit)? = null,
 ) {
     var url by rememberSaveable { mutableStateOf(initial?.url.orEmpty()) }
     var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
-    var adBlock by rememberSaveable { mutableStateOf(initial?.adBlock ?: true) }
     var error by remember { mutableStateOf<String?>(null) }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     var measuring by remember { mutableStateOf(onMeasure != null) }
@@ -398,15 +418,23 @@ internal fun SiteEditorDialog(
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = adBlock, onCheckedChange = { adBlock = it })
-                    Column(Modifier.padding(start = 4.dp)) {
-                        Text("Блокировать рекламу", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "Только для этого сайта",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                if (onClearHidden != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Скрытые блоки", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                if (hiddenCount > 0) {
+                                    "Спрятано на этом сайте: $hiddenCount"
+                                } else {
+                                    "Пока ничего не скрыто. В меню на странице есть «Удалить блок»."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (hiddenCount > 0) {
+                            TextButton(onClick = onClearHidden) { Text("Вернуть") }
+                        }
                     }
                 }
                 if (onClearCache != null) {
@@ -450,7 +478,7 @@ internal fun SiteEditorDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val problem = onSave(url.trim(), title.trim().ifBlank { null }, adBlock)
+                val problem = onSave(url.trim(), title.trim().ifBlank { null })
                 if (problem == null) onDismiss() else error = problem
             }) { Text(if (initial == null) "Добавить" else "Сохранить") }
         },
