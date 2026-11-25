@@ -59,6 +59,7 @@ fun HomeScreen(
     onContinue: (ReadingState.Recent) -> Unit,
     onAddSite: (url: String, title: String?, limitMb: Int, zoom: Int, dark: Boolean) -> String?,
     onHistory: () -> Unit,
+    onBookmarks: () -> Unit,
     onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -70,6 +71,8 @@ fun HomeScreen(
         }
     var addOpen by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    // Пересчитывается при возврате в приложение и после импорта профиля.
+    val bookmarkCount = remember(UiState.resumeTick, message) { History.bookmarks(context).size }
     var update by remember { mutableStateOf<UpdateChecker.Check?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     var pendingRelease by remember { mutableStateOf<UpdateChecker.Release?>(null) }
@@ -219,6 +222,47 @@ fun HomeScreen(
                 }
             }
 
+            item("library") {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "Библиотека",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            FilledTonalButton(
+                                onClick = onHistory,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("История") }
+                            FilledTonalButton(
+                                onClick = onBookmarks,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    if (bookmarkCount > 0) "Закладки ($bookmarkCount)" else "Закладки",
+                                )
+                            }
+                        }
+                        Text(
+                            if (bookmarkCount > 0) {
+                                "В закладках $bookmarkCount ${pages(
+                                    bookmarkCount,
+                                )}. Звезда в меню на странице добавляет и убирает."
+                            } else {
+                                "Звезда в меню на странице добавляет закладку — потом они открываются здесь."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
             item("add") {
                 FilledTonalButton(onClick = { addOpen = true }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.Add, contentDescription = null)
@@ -243,7 +287,6 @@ fun HomeScreen(
                             TextButton(onClick = {
                                 importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                             }) { Text("Импорт") }
-                            TextButton(onClick = onHistory) { Text("История") }
                         }
                     }
                 }
@@ -432,5 +475,17 @@ private fun agoLabel(time: Long): String {
         days < 1 -> "сегодня"
         days == 1L -> "вчера"
         else -> "$days дн назад"
+    }
+}
+
+/** «страница / страницы / страниц». */
+private fun pages(count: Int): String {
+    val mod100 = count % 100
+    val mod10 = count % 10
+    return when {
+        mod100 in 11..14 -> "страниц"
+        mod10 == 1 -> "страница"
+        mod10 in 2..4 -> "страницы"
+        else -> "страниц"
     }
 }

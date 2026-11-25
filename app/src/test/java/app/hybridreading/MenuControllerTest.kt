@@ -46,10 +46,11 @@ class MenuControllerTest {
 
     @Test
     fun allFourButtonsExist() {
-        val (_, parent, _) = controller()
+        val (controller, parent, _) = controller()
+        controller.restore()
         val names = buttons(parent).keys
         assertEquals(
-            setOf("Меню", "Главная", "Сайты", "Удалить блок с сайта", "Закладка"),
+            setOf("Меню", "Главная", "Сайты", "Скрыть блок", "Закладка", "История"),
             names,
         )
     }
@@ -81,22 +82,26 @@ class MenuControllerTest {
         var sitesCalls = 0
         var hideCalls = 0
         var bookmarkCalls = 0
+        var historyCalls = 0
         controller.bind(
             onHome = { homeCalls++ },
             onSites = { sitesCalls++ },
             onHide = { hideCalls++ },
             onBookmark = { bookmarkCalls++ },
+            onHistory = { historyCalls++ },
         )
 
         found.getValue("Главная").performClick()
         found.getValue("Сайты").performClick()
-        found.getValue("Удалить блок с сайта").performClick()
+        found.getValue("Скрыть блок").performClick()
         found.getValue("Закладка").performClick()
+        found.getValue("История").performClick()
 
         assertEquals(1, homeCalls)
         assertEquals(1, sitesCalls)
         assertEquals(1, hideCalls)
         assertEquals(1, bookmarkCalls)
+        assertEquals(1, historyCalls)
         // После выбора действия меню сворачивается.
         assertFalse(controller.isExpanded())
     }

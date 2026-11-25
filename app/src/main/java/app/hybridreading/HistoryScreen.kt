@@ -2,6 +2,7 @@
 
 package app.hybridreading
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -62,7 +63,11 @@ fun HistoryScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(if (onlyBookmarks) "Закладки" else "История") },
+                title = {
+                    Text(
+                        if (onlyBookmarks) "Закладки · ${bookmarks.size}" else "История · ${entries.size}",
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -130,7 +135,11 @@ fun HistoryScreen(
             ) {
                 items(rows, key = { it.url }) { entry ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(entry.url, entry.siteId) }
+                                .padding(vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -166,7 +175,14 @@ fun HistoryScreen(
                                 )
                             }
                         }
-                        TextButton(onClick = { onOpen(entry.url, entry.siteId) }) { Text("Открыть") }
+                        if (onlyBookmarks) {
+                            IconButton(onClick = {
+                                History.removeBookmark(context, entry.url)
+                                reload()
+                            }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Убрать из закладок")
+                            }
+                        }
                     }
                 }
             }

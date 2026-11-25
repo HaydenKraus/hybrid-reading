@@ -161,6 +161,7 @@ private fun AppRoot(
 
     var drawer by remember { mutableStateOf(false) }
     var historyScreen by remember { mutableStateOf(false) }
+    var bookmarksOnly by remember { mutableStateOf(false) }
     var home by remember { mutableStateOf(startAtHome || site == null) }
     var reloadToken by remember { mutableStateOf(0) }
 
@@ -210,6 +211,7 @@ private fun AppRoot(
                 onPageSeen = { url, title ->
                     History.add(context, url, title, SitesStore.active.value?.id.orEmpty())
                 },
+                onHistory = { historyScreen = true },
                 onBookmark = {
                     val url = WebHolder.webView?.url
                     if (url != null && url.startsWith("http")) {
@@ -247,7 +249,14 @@ private fun AppRoot(
                         error
                     },
                     onMenu = { drawer = true },
-                    onHistory = { historyScreen = true },
+                    onHistory = {
+                        bookmarksOnly = false
+                        historyScreen = true
+                    },
+                    onBookmarks = {
+                        bookmarksOnly = true
+                        historyScreen = true
+                    },
                 )
             }
         }
@@ -255,6 +264,7 @@ private fun AppRoot(
         if (historyScreen) {
             Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 HistoryScreen(
+                    bookmarksOnly = bookmarksOnly,
                     onBack = { historyScreen = false },
                     onOpen = { url, siteId ->
                         siteId.takeIf { it.isNotBlank() }?.let { SitesStore.select(it) }

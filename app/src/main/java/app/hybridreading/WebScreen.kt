@@ -130,6 +130,7 @@ fun WebScreen(
     onOpenSites: () -> Unit,
     onHome: () -> Unit,
     onBookmark: () -> Unit = {},
+    onHistory: () -> Unit = {},
     onPageSeen: (url: String, title: String) -> Unit = { _, _ -> },
     onPageTitle: (String) -> Unit,
 ) {
@@ -164,6 +165,7 @@ fun WebScreen(
     val openSites by rememberUpdatedState(onOpenSites)
     val goHome by rememberUpdatedState(onHome)
     val addBookmark by rememberUpdatedState(onBookmark)
+    val openHistory by rememberUpdatedState(onHistory)
 
     // Панель режима выбора блока: подсказка и выход. Обычный View — Compose поверх AndroidView не рисуется.
     val pickerBar =
@@ -216,6 +218,7 @@ fun WebScreen(
                             onSites = { openSites() },
                             onHide = { engine.startPicker() },
                             onBookmark = { addBookmark() },
+                            onHistory = { openHistory() },
                         )
                     }
                 addView(
