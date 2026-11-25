@@ -10,7 +10,6 @@ import android.webkit.WebView
  * Здесь запоминается последняя страница, чтобы продолжить чтение с того же места.
  */
 object ReadingState {
-
     private const val PREFS = "reading_state"
     private const val KEY_URL = "url"
     private const val KEY_SCROLL = "scroll"
@@ -22,7 +21,11 @@ object ReadingState {
     /** Считаем позицию актуальной трое суток. */
     private const val MAX_AGE_MS = 3L * 24 * 60 * 60 * 1000
 
-    fun save(context: Context, url: String, scroll: Float) {
+    fun save(
+        context: Context,
+        url: String,
+        scroll: Float,
+    ) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(KEY_URL, url)
             .putFloat(KEY_SCROLL, scroll)
@@ -31,7 +34,10 @@ object ReadingState {
     }
 
     /** Позиция прокрутки спрашивается у страницы асинхронно, поэтому сохраняем через колбэк. */
-    fun remember(webView: WebView, context: Context) {
+    fun remember(
+        webView: WebView,
+        context: Context,
+    ) {
         val url = webView.url ?: return
         if (!url.startsWith("http")) return
         val app = context.applicationContext
@@ -47,13 +53,19 @@ object ReadingState {
     data class Recent(val url: String, val title: String, val siteId: String, val time: Long)
 
     /** Дописывает страницу в историю чтения (последние 12, без дублей по адресу). */
-    fun rememberPage(context: Context, url: String, title: String, siteId: String) {
+    fun rememberPage(
+        context: Context,
+        url: String,
+        title: String,
+        siteId: String,
+    ) {
         if (!url.startsWith("http")) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val current = prefs.getString(KEY_RECENT, null).orEmpty()
         val lines = current.lineSequence().filter { it.isNotBlank() }.toMutableList()
-        val entry = listOf(url, title.replace('\t', ' ').replace('\n', ' '), siteId, System.currentTimeMillis().toString())
-            .joinToString("\t")
+        val entry =
+            listOf(url, title.replace('\t', ' ').replace('\n', ' '), siteId, System.currentTimeMillis().toString())
+                .joinToString("\t")
         lines.removeAll { it.substringBefore('\t') == url }
         lines.add(0, entry)
         while (lines.size > MAX_RECENT) lines.removeAt(lines.size - 1)
@@ -61,7 +73,10 @@ object ReadingState {
     }
 
     /** Свежие страницы для домашней страницы, новые сверху. */
-    fun recentPages(context: Context, limit: Int = 6): List<Recent> {
+    fun recentPages(
+        context: Context,
+        limit: Int = 6,
+    ): List<Recent> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_RECENT, null) ?: return emptyList()
         val now = System.currentTimeMillis()
@@ -78,17 +93,24 @@ object ReadingState {
             .toList()
     }
 
-    fun forgetPage(context: Context, url: String) {
+    fun forgetPage(
+        context: Context,
+        url: String,
+    ) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val kept = prefs.getString(KEY_RECENT, null).orEmpty()
-            .lineSequence()
-            .filter { it.isNotBlank() && it.substringBefore('\t') != url }
-            .joinToString("\n")
+        val kept =
+            prefs.getString(KEY_RECENT, null).orEmpty()
+                .lineSequence()
+                .filter { it.isNotBlank() && it.substringBefore('\t') != url }
+                .joinToString("\n")
         prefs.edit().putString(KEY_RECENT, kept).apply()
     }
 
     /** Последняя страница, если запись свежая и относится к тому же сайту, что и [siteUrl]. */
-    fun lastUrl(context: Context, siteUrl: String): String? {
+    fun lastUrl(
+        context: Context,
+        siteUrl: String,
+    ): String? {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val url = prefs.getString(KEY_URL, null) ?: return null
         if (!isFresh(prefs.getLong(KEY_TIME, 0))) return null
@@ -97,7 +119,10 @@ object ReadingState {
     }
 
     /** Сохранённая прокрутка для [url]; -1, если восстанавливать нечего. */
-    fun scrollFor(context: Context, url: String): Float {
+    fun scrollFor(
+        context: Context,
+        url: String,
+    ): Float {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_URL, null) != url) return -1f
         if (!isFresh(prefs.getLong(KEY_TIME, 0))) return -1f
@@ -105,7 +130,10 @@ object ReadingState {
     }
 
     /** Запоминает, был ли пользователь на домашней странице, а не на сайте. */
-    fun saveHome(context: Context, atHome: Boolean) {
+    fun saveHome(
+        context: Context,
+        atHome: Boolean,
+    ) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean(KEY_HOME, atHome)
             .apply()

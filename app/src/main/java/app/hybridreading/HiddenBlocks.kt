@@ -8,7 +8,6 @@ import android.content.SharedPreferences
  * Хранится по одному ключу на сайт, селекторы разделены переводом строки.
  */
 object HiddenBlocks {
-
     private const val PREFS = "hidden_blocks"
     private var prefs: SharedPreferences? = null
 
@@ -17,7 +16,10 @@ object HiddenBlocks {
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .also { prefs = it }
 
-    fun get(context: Context, siteId: String): List<String> =
+    fun get(
+        context: Context,
+        siteId: String,
+    ): List<String> =
         prefs(context).getString(siteId, null)
             ?.lineSequence()
             ?.map { it.trim() }
@@ -25,10 +27,17 @@ object HiddenBlocks {
             ?.toList()
             .orEmpty()
 
-    fun count(context: Context, siteId: String): Int = get(context, siteId).size
+    fun count(
+        context: Context,
+        siteId: String,
+    ): Int = get(context, siteId).size
 
     /** Возвращает false, если такой селектор уже скрыт. */
-    fun add(context: Context, siteId: String, selector: String): Boolean {
+    fun add(
+        context: Context,
+        siteId: String,
+        selector: String,
+    ): Boolean {
         val clean = selector.trim()
         if (clean.isEmpty()) return false
         val current = get(context, siteId)
@@ -37,11 +46,31 @@ object HiddenBlocks {
         return true
     }
 
-    fun clear(context: Context, siteId: String) {
+    fun remove(
+        context: Context,
+        siteId: String,
+        selector: String,
+    ) {
+        val current = get(context, siteId)
+        val updated = current.filterNot { it == selector.trim() }
+        if (updated.size == current.size) return
+        if (updated.isEmpty()) {
+            prefs(context).edit().remove(siteId).apply()
+        } else {
+            prefs(context).edit().putString(siteId, updated.joinToString("\n")).apply()
+        }
+    }
+
+    fun clear(
+        context: Context,
+        siteId: String,
+    ) {
         prefs(context).edit().remove(siteId).apply()
     }
 
     /** CSS, который прячет все сохранённые блоки сайта. */
-    fun css(context: Context, siteId: String): String =
-        get(context, siteId).joinToString("") { it + "{display:none!important}" }
+    fun css(
+        context: Context,
+        siteId: String,
+    ): String = get(context, siteId).joinToString("") { it + "{display:none!important}" }
 }

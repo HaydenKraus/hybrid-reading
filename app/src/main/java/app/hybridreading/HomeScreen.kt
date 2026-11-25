@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,42 +57,51 @@ fun HomeScreen(
     versionName: String,
     onOpenSite: (Site) -> Unit,
     onContinue: (ReadingState.Recent) -> Unit,
-    onAddSite: (url: String, title: String?, limitMb: Int) -> String?,
+    onAddSite: (url: String, title: String?, limitMb: Int, zoom: Int, dark: Boolean) -> String?,
+    onHistory: () -> Unit,
     onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Счётчики скрытых блоков считаем один раз на список, а не в каждой карточке при рекомпозиции.
+    val hiddenCounts =
+        remember(sites, UiState.resumeTick) {
+            sites.associate { it.id to HiddenBlocks.count(context, it.id) }
+        }
     var addOpen by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var update by remember { mutableStateOf<UpdateChecker.Check?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     var pendingRelease by remember { mutableStateOf<UpdateChecker.Release?>(null) }
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            context.contentResolver.openOutputStream(uri)?.use { stream ->
-                stream.write(ProfileBackup.buildJson(context).toByteArray())
-            } ?: error("Не удалось открыть файл")
-        }.onSuccess { message = "Профиль сохранён" }
-            .onFailure { message = "Экспорт не удался: ${it.message}" }
-    }
+    val exportLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/json"),
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { stream ->
+                    stream.write(ProfileBackup.buildJson(context).toByteArray())
+                } ?: error("Не удалось открыть файл")
+            }.onSuccess { message = "Профиль сохранён" }
+                .onFailure { message = "Экспорт не удался: ${it.message}" }
+        }
 
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            val text = context.contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.use { it.readText() }
-                ?: error("Не удалось прочитать файл")
-            ProfileBackup.restore(context, text)
-        }.onSuccess { message = "Импорт: $it. Входы на сайтах нужно выполнить заново." }
-            .onFailure { message = "Импорт не удался: ${it.message}" }
-    }
+    val importLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocument(),
+        ) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            runCatching {
+                val text =
+                    context.contentResolver.openInputStream(uri)
+                        ?.bufferedReader()
+                        ?.use { it.readText() }
+                        ?: error("Не удалось прочитать файл")
+                ProfileBackup.restore(context, text)
+            }.onSuccess { message = "Импорт: $it. Входы на сайтах нужно выполнить заново." }
+                .onFailure { message = "Импорт не удался: ${it.message}" }
+        }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -115,35 +125,95 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (recents.isNotEmpty()) {
-                item("recent-title") {
-                    Text(
-                        "Продолжить чтение",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                items(recents, key = { "recent-${it.url}" }) { recent ->
+                val first = recents.first()
+                item("continue") {
                     Card(
-                        onClick = { onContinue(recent) },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        colors =
+                            CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            ),
                     ) {
                         Column(
-                            Modifier.fillMaxWidth().padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                                Text(
+                                    "ВЫ ОСТАНОВИЛИСЬ ЗДЕСЬ",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(start = 6.dp),
+                                )
+                            }
                             Text(
-                                recent.title.ifBlank { UrlTools.host(recent.url) ?: recent.url },
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
+                                first.title.ifBlank { UrlTools.host(first.url) ?: first.url },
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 3,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                UrlTools.host(recent.url) ?: recent.url,
+                                (UrlTools.host(first.url) ?: first.url) + " · " + agoLabel(first.time),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
                             )
+                            FilledTonalButton(
+                                onClick = { onContinue(first) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                                Text("Продолжить чтение", Modifier.padding(start = 6.dp))
+                            }
+                        }
+                    }
+                }
+                if (recents.size > 1) {
+                    item("recent-title") {
+                        Text(
+                            "Ранее открытые",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    items(recents.drop(1), key = { "recent-${it.url}" }) { recent ->
+                        Card(
+                            onClick = { onContinue(recent) },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        recent.title.ifBlank { UrlTools.host(recent.url) ?: recent.url },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        (UrlTools.host(recent.url) ?: recent.url) + " · " + agoLabel(recent.time),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    "Открыть",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(start = 8.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -161,8 +231,8 @@ fun HomeScreen(
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Профиль", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Экспорт сохраняет сайты, лимиты кэша и скрытые блоки в файл; импорт возвращает их "
-                                + "после переустановки. Куки и входы в файл не попадают.",
+                            "Экспорт сохраняет сайты, лимиты кэша и скрытые блоки в файл; импорт возвращает их " +
+                                "после переустановки. Куки и входы в файл не попадают.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -173,6 +243,7 @@ fun HomeScreen(
                             TextButton(onClick = {
                                 importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
                             }) { Text("Импорт") }
+                            TextButton(onClick = onHistory) { Text("История") }
                         }
                     }
                 }
@@ -181,7 +252,11 @@ fun HomeScreen(
             item("update") {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Обновления", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Обновления",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Text(
                             "Установлена версия $versionName. Обновление скачивается с GitHub и ставится поверх.",
                             style = MaterialTheme.typography.bodySmall,
@@ -192,11 +267,12 @@ fun HomeScreen(
                             onClick = {
                                 busy = "Проверяем…"
                                 scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        runCatching { UpdateChecker.check() }.getOrElse {
-                                            UpdateChecker.Check.Failed(it.message ?: "Ошибка сети")
+                                    val result =
+                                        withContext(Dispatchers.IO) {
+                                            runCatching { UpdateChecker.check() }.getOrElse {
+                                                UpdateChecker.Check.Failed(it.message ?: "Ошибка сети")
+                                            }
                                         }
-                                    }
                                     busy = null
                                     update = result
                                 }
@@ -218,10 +294,15 @@ fun HomeScreen(
             items(sites, key = { it.id }) { site ->
                 Card(
                     onClick = { onOpenSite(site) },
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (site.id == activeId) MaterialTheme.colorScheme.surfaceVariant
-                        else MaterialTheme.colorScheme.surface,
-                    ),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                if (site.id == activeId) {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                },
+                        ),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -242,7 +323,7 @@ fun HomeScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        val hidden = HiddenBlocks.count(context, site.id)
+                        val hidden = hiddenCounts[site.id] ?: 0
                         if (hidden > 0) {
                             Text(
                                 "скрыто блоков: $hidden",
@@ -269,7 +350,7 @@ fun HomeScreen(
         SiteEditorDialog(
             initial = null,
             onDismiss = { addOpen = false },
-            onSave = { url, title, limit -> onAddSite(url, title, limit) },
+            onSave = { url, title, limit, zoom, dark -> onAddSite(url, title, limit, zoom, dark) },
         )
     }
 
@@ -300,13 +381,14 @@ fun HomeScreen(
                         if (release == null) return@TextButton
                         busy = "Скачиваем…"
                         scope.launch {
-                            val file = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    UpdateChecker.download(context, release) { percent ->
-                                        busy = "Скачиваем… $percent%"
+                            val file =
+                                withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        UpdateChecker.download(context, release) { percent ->
+                                            busy = "Скачиваем… $percent%"
+                                        }
                                     }
                                 }
-                            }
                             busy = null
                             file.onSuccess { apk ->
                                 runCatching { UpdateChecker.install(context, apk) }
@@ -319,20 +401,36 @@ fun HomeScreen(
             )
         }
 
-        is UpdateChecker.Check.Actual -> AlertDialog(
-            onDismissRequest = { update = null },
-            title = { Text("Обновлений нет") },
-            text = { Text("Установлена последняя версия ${state.version}.") },
-            confirmButton = { TextButton(onClick = { update = null }) { Text("Закрыть") } },
-        )
+        is UpdateChecker.Check.Actual ->
+            AlertDialog(
+                onDismissRequest = { update = null },
+                title = { Text("Обновлений нет") },
+                text = { Text("Установлена последняя версия ${state.version}.") },
+                confirmButton = { TextButton(onClick = { update = null }) { Text("Закрыть") } },
+            )
 
-        is UpdateChecker.Check.Failed -> AlertDialog(
-            onDismissRequest = { update = null },
-            title = { Text("Не удалось проверить") },
-            text = { Text(state.message) },
-            confirmButton = { TextButton(onClick = { update = null }) { Text("Закрыть") } },
-        )
+        is UpdateChecker.Check.Failed ->
+            AlertDialog(
+                onDismissRequest = { update = null },
+                title = { Text("Не удалось проверить") },
+                text = { Text(state.message) },
+                confirmButton = { TextButton(onClick = { update = null }) { Text("Закрыть") } },
+            )
 
         null -> Unit
+    }
+}
+
+/** «только что», «12 мин назад», «сегодня», «вчера», «3 дня назад». */
+private fun agoLabel(time: Long): String {
+    val now = System.currentTimeMillis()
+    val minutes = ((now - time) / 60_000).coerceAtLeast(0)
+    val days = ((now - time) / 86_400_000).coerceAtLeast(0)
+    return when {
+        minutes < 1 -> "только что"
+        minutes < 60 -> "$minutes мин назад"
+        days < 1 -> "сегодня"
+        days == 1L -> "вчера"
+        else -> "$days дн назад"
     }
 }

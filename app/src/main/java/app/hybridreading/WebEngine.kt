@@ -1,21 +1,15 @@
 package app.hybridreading
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
-import android.view.Gravity
 import android.view.View
-import android.widget.Toast
 import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
@@ -28,72 +22,96 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.activity.compose.rememberLauncherForActivityResult
+import android.widget.Toast
 import androidx.activity.result.ActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
+import androidx.core.content.ContextCompat
 import java.net.URI
 
 internal class WebEngineState(private val context: Context) {
-
     @Volatile
     var site: Site? = null
 
+    /** Масштаб текста и тёмная тема текущего сайта; применяются без пересоздания WebView. */
+    @Volatile
+    private var zoomPercent: Int = 100
+
+    @Volatile
+    private var darkForced: Boolean = false
+
+    fun applyDisplay(
+        preferences: Site?,
+        view: WebView?,
+    ) {
+        val target = view ?: main ?: return
+        val zoom = preferences?.textZoom ?: 100
+        if (zoomPercent != zoom) {
+            zoomPercent = zoom
+            runCatching { target.settings.textZoom = zoom }
+        }
+        val dark = preferences?.darkMode ?: false
+        if (darkForced != dark) {
+            darkForced = dark
+            runCatching {
+                if (androidx.webkit.WebViewFeature.isFeatureSupported(
+                        androidx.webkit.WebViewFeature.ALGORITHMIC_DARKENING,
+                    )
+                ) {
+                    androidx.webkit.WebSettingsCompat.setAlgorithmicDarkeningAllowed(
+                        target.settings,
+                        dark,
+                    )
+                } else if (androidx.webkit.WebViewFeature.isFeatureSupported(
+                        androidx.webkit.WebViewFeature.FORCE_DARK,
+                    )
+                ) {
+                    @Suppress("DEPRECATION")
+                    androidx.webkit.WebSettingsCompat.setForceDark(
+                        target.settings,
+                        if (dark) {
+                            androidx.webkit.WebSettingsCompat.FORCE_DARK_ON
+                        } else {
+                            androidx.webkit.WebSettingsCompat.FORCE_DARK_OFF
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /** Показать скрытый блок на 5 секунд: правило display:none перекрывается на время. */
+    fun previewHidden(selector: String) {
+        val view = main ?: return
+        val safe = selector.replace("\\", "\\\\").replace("\"", "\\\"")
+        val js =
+            "(function(){var id='ink-preview';var old=document.getElementById(id);" +
+                "if(old){old.remove();}var st=document.createElement('style');st.id=id;" +
+                "st.textContent='$safe{display:revert!important;outline:2px dashed #7c5cff!important}';" +
+                "(document.head||document.documentElement).appendChild(st);" +
+                "setTimeout(function(){var s=document.getElementById(id);if(s){s.remove();}},5000);})();"
+        runCatching { view.evaluateJavascript(js, null) }
+    }
+
     var onTitle: (String) -> Unit = {}
+
+    /** Заголовок текущей страницы: нужен истории, когда onReceivedTitle приходит с опозданием. */
+    @Volatile
+    private var titleText: String = ""
 
     /** Режим выбора включён; переживает переходы по страницам. */
     var picking: Boolean = false
 
     var onPicking: (Boolean) -> Unit = {}
+
+    /** Страница открыта: адрес и заголовок — для истории и списка «Продолжить чтение». */
+    var onPageSeen: (String, String) -> Unit = { _, _ -> }
 
     var loading by mutableStateOf(false)
         private set
@@ -152,7 +170,12 @@ internal class WebEngineState(private val context: Context) {
 
     fun crashRenderer(view: WebView) {
         (view.parent as? ViewGroup)?.removeView(view)
-        handler.post { runCatching { view.stopLoading(); view.destroy() } }
+        handler.post {
+            runCatching {
+                view.stopLoading()
+                view.destroy()
+            }
+        }
         if (view === main) {
             error = "Встроенный браузер перезапустился: страница упала (не хватило памяти)."
             generation++
@@ -162,7 +185,10 @@ internal class WebEngineState(private val context: Context) {
     /** Приём выбранного блока из JS: селектор сохраняем и сразу прячем. */
     private inner class PickerBridge {
         @JavascriptInterface
-        fun onPicked(selector: String, label: String) {
+        fun onPicked(
+            selector: String,
+            label: String,
+        ) {
             val target = site ?: return
             Handler(Looper.getMainLooper()).post {
                 if (selector.isBlank()) {
@@ -175,7 +201,11 @@ internal class WebEngineState(private val context: Context) {
     }
 
     /** Подтверждение: режим выбора при этом не заканчивается. */
-    private fun confirmHide(siteId: String, selector: String, label: String) {
+    private fun confirmHide(
+        siteId: String,
+        selector: String,
+        label: String,
+    ) {
         val view = main ?: return
         android.app.AlertDialog.Builder(context)
             .setTitle("Скрыть этот блок?")
@@ -195,6 +225,38 @@ internal class WebEngineState(private val context: Context) {
             .show()
     }
 
+    /** Скрипт на загрузку страницы: собирает все правки в один вызов evaluateJavascript. */
+    fun pageReadyScript(): String {
+        val css = HiddenBlocks.css(context, site?.id.orEmpty())
+        val limitMb = site?.cacheLimitMb ?: 0
+        return buildString {
+            append("(function(){")
+            append("try{")
+            append(smoothJs())
+            append(persistJs())
+            append(hiddenCssJs(css))
+            if (limitMb > 0) append(trimJs(limitMb.toLong() * 1024 * 1024))
+            append("}catch(e){}})();")
+            if (picking) append(PICK_JS)
+        }
+    }
+
+    private fun smoothJs(): String =
+        "if(!window.__inkSmooth){window.__inkSmooth=true;var st=document.createElement('style');" +
+            "st.textContent='html{scroll-behavior:smooth!important}'+" +
+            "'html,body{overscroll-behavior:none}'+" +
+            "'img,video,canvas{max-width:100%!important;height:auto}'+" +
+            "'pre,table{max-width:100%;overflow-x:auto}'+" +
+            "'body{overflow-x:clip;word-break:break-word}';" +
+            "(document.head||document.documentElement).appendChild(st);}"
+
+    private fun persistJs(): String = "if(navigator.storage&&navigator.storage.persist){navigator.storage.persist();}"
+
+    private fun trimJs(bytes: Long): String =
+        "if(navigator.storage&&navigator.storage.estimate){navigator.storage.estimate().then(" +
+            "function(e){if(e&&e.usage>$bytes&&window.caches){caches.keys().then(function(k){" +
+            "k.forEach(function(n){caches.delete(n)})})}});}"
+
     /**
      * Автоочистка: если у сайта задан лимит и хранилище его превысило, удаляем кэш глав.
      * Считаем и чистим прямо на странице сайта — тот же origin, без лишних WebView.
@@ -203,11 +265,7 @@ internal class WebEngineState(private val context: Context) {
         val limitMb = site?.cacheLimitMb ?: 0
         if (limitMb <= 0) return
         val bytes = limitMb.toLong() * 1024 * 1024
-        val js = "(function(){try{if(!navigator.storage||!navigator.storage.estimate)return;" +
-            "navigator.storage.estimate().then(function(e){if(e&&e.usage>$bytes){" +
-            "if(!window.caches)return;caches.keys().then(function(k){k.forEach(function(n){caches.delete(n)})})}" +
-            "})}catch(err){}})();"
-        runCatching { view.evaluateJavascript(js, null) }
+        runCatching { view.evaluateJavascript("(function(){try{" + trimJs(bytes) + "}catch(e){}})();", null) }
     }
 
     /** Прячет сохранённые блоки сайта на загруженной странице. */
@@ -268,9 +326,14 @@ internal class WebEngineState(private val context: Context) {
             setSupportZoom(false)
             builtInZoomControls = false
             displayZoomControls = false
-            textZoom = 100
+            textZoom = zoomPercent
             userAgentString = USER_AGENT
             setOffscreenPreRaster(true)
+            // Страница не должна читать локальные файлы и content:// — доступны только http(s).
+            allowFileAccess = false
+            allowContentAccess = false
+            allowFileAccessFromFileURLs = false
+            allowUniversalAccessFromFileURLs = false
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -278,192 +341,226 @@ internal class WebEngineState(private val context: Context) {
         }
     }
 
-    private fun buildClient(): WebViewClient = object : WebViewClient() {
+    private fun buildClient(): WebViewClient =
+        object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
+                val uri = request.url ?: return false
+                val scheme = uri.scheme?.lowercase().orEmpty()
+                if (scheme != "http" && scheme != "https") {
+                    if (scheme in EXTERNAL_SCHEMES) openExternal(uri)
+                    return true
+                }
+                // http/https всегда внутри: никаких белых списков, иначе OAuth выкидывает из приложения.
+                return false
+            }
 
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val uri = request.url ?: return false
-            val scheme = uri.scheme?.lowercase().orEmpty()
-            if (scheme != "http" && scheme != "https") {
-                if (scheme in EXTERNAL_SCHEMES) openExternal(uri)
+            override fun onPageStarted(
+                view: WebView,
+                url: String?,
+                favicon: Bitmap?,
+            ) {
+                if (view !== main) {
+                    onPopupPage(view, url)
+                    return
+                }
+                error = null
+                progress = 0
+                loading = true
+            }
+
+            override fun onPageFinished(
+                view: WebView,
+                url: String?,
+            ) {
+                if (view !== main) {
+                    onPopupPage(view, url)
+                    return
+                }
+                loading = false
+                progress = 100
+                if (url != null && isWebUrl(url)) {
+                    // Один вызов вместо четырёх: плавность, постоянное хранилище, скрытые блоки,
+                    // автоочистка и режим выбора — всё в одном скрипте, меньше переходов в JS.
+                    view.evaluateJavascript(pageReadyScript(), null)
+                }
+                if (url != null) {
+                    takeScrollFor(url)?.let { y ->
+                        view.evaluateJavascript("window.scrollTo(0, ${y.toInt()})", null)
+                    }
+                }
+            }
+
+            override fun onRenderProcessGone(
+                view: WebView?,
+                detail: RenderProcessGoneDetail?,
+            ): Boolean {
+                // Иначе система убивает процесс приложения целиком.
+                view?.let { crashRenderer(it) }
                 return true
             }
-            // http/https всегда внутри: никаких белых списков, иначе OAuth выкидывает из приложения.
-            return false
-        }
 
-        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-            if (view !== main) {
-                onPopupPage(view, url)
-                return
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                failure: WebResourceError,
+            ) {
+                if (!request.isForMainFrame || view !== main) return
+                loading = false
+                error = "Сайт не ответил (код ${failure.errorCode}). ${failure.description}"
             }
-            error = null
-            progress = 0
-            loading = true
-        }
 
-        override fun onPageFinished(view: WebView, url: String?) {
-            if (view !== main) {
-                onPopupPage(view, url)
-                return
-            }
-            loading = false
-            progress = 100
-            if (url != null && isWebUrl(url)) {
-                view.evaluateJavascript(SMOOTH_JS, null)
-                // Постоянное хранилище: иначе браузер вправе вытеснить скачанные сайтом главы.
-                view.evaluateJavascript(PERSIST_JS, null)
-            }
-            if (url != null && isWebUrl(url)) {
-                applyHiddenBlocks(view)
-                trimCacheIfNeeded(view)
-                if (picking) view.evaluateJavascript(PICK_JS, null)
-            }
-            if (url != null) {
-                takeScrollFor(url)?.let { y ->
-                    view.evaluateJavascript("window.scrollTo(0, ${y.toInt()})", null)
+            override fun onReceivedSslError(
+                view: WebView,
+                handler: SslErrorHandler,
+                sslError: SslError,
+            ) {
+                // Сертификат не подтверждён — соединение прерываем и говорим об этом прямо.
+                handler.cancel()
+                if (view === main) {
+                    loading = false
+                    error = "Сертификат сайта недействителен, соединение прервано."
                 }
             }
         }
 
-        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-            // Иначе система убивает процесс приложения целиком.
-            view?.let { crashRenderer(it) }
-            return true
-        }
+    private fun buildChrome(): WebChromeClient =
+        object : WebChromeClient() {
+            override fun onProgressChanged(
+                view: WebView,
+                newProgress: Int,
+            ) {
+                if (view !== main) return
+                progress = newProgress
+                loading = newProgress < 100
+            }
 
-        override fun onReceivedError(view: WebView, request: WebResourceRequest, failure: WebResourceError) {
-            if (!request.isForMainFrame || view !== main) return
-            loading = false
-            error = "Сайт не ответил (код ${failure.errorCode}). ${failure.description}"
-        }
+            override fun onReceivedTitle(
+                view: WebView,
+                title: String?,
+            ) {
+                if (title.isNullOrBlank()) return
+                if (view === popup) {
+                    popupTitle = title
+                } else if (view === main) {
+                    titleText = title
+                    onTitle(title)
+                    view.url?.takeIf { isWebUrl(it) }?.let { url -> onPageSeen(url, title) }
+                }
+            }
 
-        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, sslError: SslError) {
-            // Сертификат не подтверждён — соединение прерываем и говорим об этом прямо.
-            handler.cancel()
-            if (view === main) {
-                loading = false
-                error = "Сертификат сайта недействителен, соединение прервано."
+            override fun onCreateWindow(
+                view: WebView,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message,
+            ): Boolean {
+                // Без жеста пользователя окна открывает только реклама — такие запросы игнорируем.
+                if (!isUserGesture && !isDialog) return false
+                val popupView = WebView(context)
+                applySettings(popupView)
+                popupView.webViewClient = buildClient()
+                popupView.webChromeClient = buildChrome()
+                val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                // Вложенный попап заменяет предыдущий: старый WebView надо освободить.
+                val previous = popup
+                popup = popupView
+                popupTitle = null
+                if (previous != null && previous !== popupView) destroyLater(previous)
+                transport.webView = popupView
+                resultMsg.sendToTarget()
+                return true
+            }
+
+            override fun onCloseWindow(window: WebView) {
+                if (window === popup) closePopup()
+            }
+
+            override fun onShowFileChooser(
+                view: WebView,
+                callback: ValueCallback<Array<Uri>>,
+                params: WebChromeClient.FileChooserParams,
+            ): Boolean {
+                // Незакрытый предыдущий запрос отменяем, иначе input навсегда останется «занятым».
+                chooser?.callback?.onReceiveValue(null)
+                chooser = FileChooserRequest(callback, params)
+                return true
+            }
+
+            override fun onPermissionRequest(request: PermissionRequest) {
+                // Решение принимает композиция: она запрашивает системные разрешения и отвечает сайту.
+                permissionHandler(request)
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String?,
+                callback: GeolocationPermissions.Callback,
+            ) {
+                // Геолокации в приложении нет (и разрешения в манифесте тоже) — честно отказываем.
+                callback.invoke(origin, false, false)
+            }
+
+            override fun onShowCustomView(
+                view: View,
+                callback: WebChromeClient.CustomViewCallback,
+            ) {
+                if (fullscreen != null) {
+                    callback.onCustomViewHidden()
+                    return
+                }
+                fullscreen = view
+                customViewCallback = callback
+            }
+
+            override fun onHideCustomView() {
+                hideCustomView()
+            }
+
+            override fun onJsAlert(
+                view: WebView,
+                url: String?,
+                message: String?,
+                result: JsResult,
+            ): Boolean {
+                enqueueDialog(JsDialogRequest(JsDialogRequest.Kind.ALERT, message.orEmpty(), null, result, null))
+                return true
+            }
+
+            override fun onJsConfirm(
+                view: WebView,
+                url: String?,
+                message: String?,
+                result: JsResult,
+            ): Boolean {
+                enqueueDialog(JsDialogRequest(JsDialogRequest.Kind.CONFIRM, message.orEmpty(), null, result, null))
+                return true
+            }
+
+            override fun onJsPrompt(
+                view: WebView,
+                url: String?,
+                message: String?,
+                defaultValue: String?,
+                result: JsPromptResult,
+            ): Boolean {
+                enqueueDialog(
+                    JsDialogRequest(JsDialogRequest.Kind.PROMPT, message.orEmpty(), defaultValue, result, result),
+                )
+                return true
             }
         }
-    }
-
-    private fun buildChrome(): WebChromeClient = object : WebChromeClient() {
-
-        override fun onProgressChanged(view: WebView, newProgress: Int) {
-            if (view !== main) return
-            progress = newProgress
-            loading = newProgress < 100
-        }
-
-        override fun onReceivedTitle(view: WebView, title: String?) {
-            if (title.isNullOrBlank()) return
-            if (view === popup) popupTitle = title else if (view === main) onTitle(title)
-        }
-
-        override fun onCreateWindow(
-            view: WebView,
-            isDialog: Boolean,
-            isUserGesture: Boolean,
-            resultMsg: Message,
-        ): Boolean {
-            // Без жеста пользователя окна открывает только реклама — такие запросы игнорируем.
-            if (!isUserGesture && !isDialog) return false
-            val popupView = WebView(context)
-            applySettings(popupView)
-            popupView.webViewClient = buildClient()
-            popupView.webChromeClient = buildChrome()
-            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
-            // Вложенный попап заменяет предыдущий: старый WebView надо освободить.
-            val previous = popup
-            popup = popupView
-            popupTitle = null
-            if (previous != null && previous !== popupView) destroyLater(previous)
-            transport.webView = popupView
-            resultMsg.sendToTarget()
-            return true
-        }
-
-        override fun onCloseWindow(window: WebView) {
-            if (window === popup) closePopup()
-        }
-
-        override fun onShowFileChooser(
-            view: WebView,
-            callback: ValueCallback<Array<Uri>>,
-            params: WebChromeClient.FileChooserParams,
-        ): Boolean {
-            // Незакрытый предыдущий запрос отменяем, иначе input навсегда останется «занятым».
-            chooser?.callback?.onReceiveValue(null)
-            chooser = FileChooserRequest(callback, params)
-            return true
-        }
-
-        override fun onPermissionRequest(request: PermissionRequest) {
-            // Решение принимает композиция: она запрашивает системные разрешения и отвечает сайту.
-            permissionHandler(request)
-        }
-
-        override fun onGeolocationPermissionsShowPrompt(
-            origin: String?,
-            callback: GeolocationPermissions.Callback,
-        ) {
-            // Геолокации в приложении нет (и разрешения в манифесте тоже) — честно отказываем.
-            callback.invoke(origin, false, false)
-        }
-
-        override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
-            if (fullscreen != null) {
-                callback.onCustomViewHidden()
-                return
-            }
-            fullscreen = view
-            customViewCallback = callback
-        }
-
-        override fun onHideCustomView() {
-            hideCustomView()
-        }
-
-        override fun onJsAlert(
-            view: WebView,
-            url: String?,
-            message: String?,
-            result: JsResult,
-        ): Boolean {
-            enqueueDialog(JsDialogRequest(JsDialogRequest.Kind.ALERT, message.orEmpty(), null, result, null))
-            return true
-        }
-
-        override fun onJsConfirm(
-            view: WebView,
-            url: String?,
-            message: String?,
-            result: JsResult,
-        ): Boolean {
-            enqueueDialog(JsDialogRequest(JsDialogRequest.Kind.CONFIRM, message.orEmpty(), null, result, null))
-            return true
-        }
-
-        override fun onJsPrompt(
-            view: WebView,
-            url: String?,
-            message: String?,
-            defaultValue: String?,
-            result: JsPromptResult,
-        ): Boolean {
-            enqueueDialog(
-                JsDialogRequest(JsDialogRequest.Kind.PROMPT, message.orEmpty(), defaultValue, result, result),
-            )
-            return true
-        }
-    }
 
     /**
      * Окно попапа: пока оно на своём сайте, это обычный target=_blank — оставляем как есть.
      * Ушло на чужой хост (OAuth) и вернулось на сайт — переносим результат в основное окно,
      * иначе вход обрывается на полпути.
      */
-    private fun onPopupPage(view: WebView, url: String?) {
+    private fun onPopupPage(
+        view: WebView,
+        url: String?,
+    ) {
         val target = main ?: return
         val page = url ?: return
         if (!isWebUrl(page)) return
@@ -483,7 +580,7 @@ internal class WebEngineState(private val context: Context) {
     private fun openExternal(uri: Uri) {
         runCatching {
             context.startActivity(
-                Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }
     }
@@ -581,23 +678,28 @@ internal val EXTERNAL_SCHEMES = setOf("mailto", "tel", "sms", "tg", "intent", "m
 
 /** Отдаём странице только камеру и микрофон: остальное (MIDI, protected media) не разрешаем. */
 internal fun grantSupported(request: PermissionRequest) {
-    val allowed = request.resources.filter {
-        it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
-    }
+    val allowed =
+        request.resources.filter {
+            it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+        }
     if (allowed.isEmpty()) request.deny() else request.grant(allowed.toTypedArray())
 }
 
 /** Разрешения, которые нужно спросить у системы под запрос страницы. */
-internal fun requiredPermissions(request: PermissionRequest): List<String> = buildList {
-    for (resource in request.resources) {
-        when (resource) {
-            PermissionRequest.RESOURCE_VIDEO_CAPTURE -> add(android.Manifest.permission.CAMERA)
-            PermissionRequest.RESOURCE_AUDIO_CAPTURE -> add(android.Manifest.permission.RECORD_AUDIO)
+internal fun requiredPermissions(request: PermissionRequest): List<String> =
+    buildList {
+        for (resource in request.resources) {
+            when (resource) {
+                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> add(android.Manifest.permission.CAMERA)
+                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> add(android.Manifest.permission.RECORD_AUDIO)
+            }
         }
-    }
-}.distinct()
+    }.distinct()
 
-internal fun allGranted(context: Context, request: PermissionRequest): Boolean =
+internal fun allGranted(
+    context: Context,
+    request: PermissionRequest,
+): Boolean =
     requiredPermissions(request).all {
         ContextCompat.checkSelfPermission(context, it) == android.content.pm.PackageManager.PERMISSION_GRANTED
     }
@@ -612,26 +714,28 @@ internal fun collectUris(result: ActivityResult): Array<Uri>? {
     return data.data?.let { arrayOf(it) }
 }
 
-internal fun isWebUrl(url: String): Boolean =
-    url.startsWith("http://") || url.startsWith("https://")
+internal fun isWebUrl(url: String): Boolean = url.startsWith("http://") || url.startsWith("https://")
 
-internal fun hostOf(url: String?): String? =
-    url?.let { runCatching { URI(it).host?.lowercase() }.getOrNull() }
+internal fun hostOf(url: String?): String? = url?.let { runCatching { URI(it).host?.lowercase() }.getOrNull() }
 
-internal fun sameHost(a: String?, b: String?): Boolean {
+internal fun sameHost(
+    a: String?,
+    b: String?,
+): Boolean {
     val hostA = hostOf(a) ?: return false
     val hostB = hostOf(b) ?: return false
     return hostA == hostB || hostA.endsWith(".$hostB") || hostB.endsWith(".$hostA")
 }
 
-internal fun sameUrl(a: String?, b: String?): Boolean {
+internal fun sameUrl(
+    a: String?,
+    b: String?,
+): Boolean {
     if (a.isNullOrBlank() || b.isNullOrBlank()) return false
     return a.trimEnd('/') == b.trimEnd('/')
 }
 
-internal fun jsQuote(value: String): String =
-    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-
+internal fun jsQuote(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 /** Плавная прокрутка: якорные переходы и скролл внутри контейнеров идут без рывков. */
 internal const val SMOOTH_JS = """

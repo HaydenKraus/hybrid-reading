@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -34,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -62,11 +65,13 @@ fun SitesDrawerContent(
     sites: List<Site>,
     activeId: String?,
     onSelect: (Site) -> Unit,
-    onAdd: (url: String, title: String?, limitMb: Int) -> String?,
-    onUpdate: (site: Site, url: String, title: String?, limitMb: Int) -> String?,
+    onAdd: (url: String, title: String?, limitMb: Int, zoom: Int, dark: Boolean) -> String?,
+    onUpdate: (site: Site, url: String, title: String?, limitMb: Int, zoom: Int, dark: Boolean) -> String?,
     onDelete: (Site, Boolean) -> Unit,
     onClearSiteCache: (Site, Boolean) -> Unit,
     onMeasureSiteCache: ((Site, (Long?) -> Unit) -> Unit)? = null,
+    onPreviewHiddenBlock: ((Site, String) -> Unit)? = null,
+    onRecountResult: (Site, Long?) -> Unit = { _, _ -> },
     onReload: () -> Unit,
     onRefreshSite: (Site) -> Unit,
     onHome: () -> Unit,
@@ -79,6 +84,10 @@ fun SitesDrawerContent(
     val context = LocalContext.current
     // Пересчитывать счётчик скрытых блоков после «Вернуть».
     var hiddenVersion by remember { mutableStateOf(0) }
+    val hiddenCounts =
+        remember(sites, hiddenVersion) {
+            sites.associate { it.id to HiddenBlocks.count(context, it.id) }
+        }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -102,9 +111,10 @@ fun SitesDrawerContent(
                         Icon(Icons.Filled.Add, contentDescription = "Добавить сайт")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
             )
         },
         bottomBar = {
@@ -129,9 +139,7 @@ fun SitesDrawerContent(
             items(sites, key = { it.id }) { site ->
                 SiteCard(
                     site = site,
-                    hiddenCount = remember(site.id, hiddenVersion) {
-                        HiddenBlocks.count(context, site.id)
-                    },
+                    hiddenCount = hiddenCounts[site.id] ?: 0,
                     active = site.id == activeId,
                     onSelect = { onSelect(site) },
                     onEdit = {
@@ -156,43 +164,73 @@ fun SitesDrawerContent(
         SiteEditorDialog(
             initial = editor,
             onDismiss = { editorOpen = false },
-            onSave = { url, title, limit ->
+            onSave = { url, title, limit, zoom, dark ->
                 val site = editor
-                if (site == null) onAdd(url, title, limit) else onUpdate(site, url, title, limit)
-            },
-            onRefresh = editor?.let { site ->
-                {
-                    editorOpen = false
-                    onRefreshSite(site)
+                if (site == null) {
+                    onAdd(url, title, limit, zoom, dark)
+                } else {
+                    onUpdate(site, url, title, limit, zoom, dark)
                 }
             },
+            onRefresh =
+                editor?.let { site ->
+                    {
+                        editorOpen = false
+                        onRefreshSite(site)
+                    }
+                },
             refreshLabel = "Обновить страницу",
             canRefresh = editor != null,
-            onClearCache = editor?.let { site ->
-                {
-                    editorOpen = false
-                    pendingCache = site to false
-                }
-            },
-            onClearAll = editor?.let { site ->
-                {
-                    editorOpen = false
-                    pendingCache = site to true
-                }
-            },
-            onMeasure = editor?.let { site ->
-                { callback: (Long?) -> Unit -> onMeasureSiteCache?.invoke(site, callback) }
-            },
-            hiddenCount = editor?.let {
-                remember(it.id, hiddenVersion) { HiddenBlocks.count(context, it.id) }
-            } ?: 0,
-            onClearHidden = editor?.let { site ->
-                {
-                    HiddenBlocks.clear(context, site.id)
-                    hiddenVersion++
-                    editorOpen = false
-                }
-            },
+            onClearCache =
+                editor?.let { site ->
+                    {
+                        editorOpen = false
+                        pendingCache = site to false
+                    }
+                },
+            onClearAll =
+                editor?.let { site ->
+                    {
+                        editorOpen = false
+                        pendingCache = site to true
+                    }
+                },
+            onMeasure =
+                editor?.let { site ->
+                    { callback: (Long?) -> Unit -> onMeasureSiteCache?.invoke(site, callback) }
+                },
+            onRecount =
+                editor?.let { site ->
+                    {
+                        onMeasureSiteCache?.invoke(site) { bytes ->
+                            onRecountResult(site, bytes)
+                        }
+                    }
+                },
+            hiddenCount = editor?.let { hiddenCounts[it.id] ?: 0 } ?: 0,
+            hiddenSelectors =
+                editor?.let {
+                    remember(it.id, hiddenVersion) { HiddenBlocks.get(context, it.id) }
+                } ?: emptyList(),
+            onPreviewHidden =
+                editor?.let { site ->
+                    { selector -> onPreviewHiddenBlock?.invoke(site, selector) }
+                },
+            onDeleteHidden =
+                editor?.let { site ->
+                    { selector ->
+                        HiddenBlocks.remove(context, site.id, selector)
+                        hiddenVersion++
+                    }
+                },
+            onClearHidden =
+                editor?.let { site ->
+                    {
+                        HiddenBlocks.clear(context, site.id)
+                        hiddenVersion++
+                        editorOpen = false
+                    }
+                },
         )
     }
 
@@ -306,17 +344,25 @@ private fun SiteCard(
     onDelete: () -> Unit,
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onSelect, onLongClick = onEdit),
-        colors = CardDefaults.cardColors(
-            containerColor = if (active) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
-        ),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onSelect, onLongClick = onEdit),
+        colors =
+            CardDefaults.cardColors(
+                containerColor =
+                    if (active) {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    },
+            ),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -364,7 +410,7 @@ private fun SiteCard(
 internal fun SiteEditorDialog(
     initial: Site?,
     onDismiss: () -> Unit,
-    onSave: (url: String, title: String?, limitMb: Int) -> String?,
+    onSave: (url: String, title: String?, limitMb: Int, zoom: Int, dark: Boolean) -> String?,
     onClearCache: (() -> Unit)? = null,
     onClearAll: (() -> Unit)? = null,
     onMeasure: (((Long?) -> Unit) -> Unit)? = null,
@@ -373,11 +419,18 @@ internal fun SiteEditorDialog(
     onRefresh: (() -> Unit)? = null,
     refreshLabel: String? = "Обновить страницу",
     canRefresh: Boolean = true,
+    onRecount: (() -> Unit)? = null,
+    hiddenSelectors: List<String> = emptyList(),
+    onPreviewHidden: ((String) -> Unit)? = null,
+    onDeleteHidden: ((String) -> Unit)? = null,
 ) {
     var url by rememberSaveable { mutableStateOf(initial?.url.orEmpty()) }
     var title by rememberSaveable { mutableStateOf(initial?.title.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var limitMb by rememberSaveable { mutableStateOf(initial?.cacheLimitMb ?: 0) }
+    var zoom by rememberSaveable { mutableStateOf(initial?.textZoom ?: 100) }
+    var dark by rememberSaveable { mutableStateOf(initial?.darkMode ?: false) }
+    var hiddenOpen by remember { mutableStateOf(false) }
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
     var measuring by remember { mutableStateOf(onMeasure != null) }
 
@@ -390,11 +443,12 @@ internal fun SiteEditorDialog(
         }
     }
 
-    val cacheSummary = when {
-        measuring -> "Считаем занятое место…"
-        cacheBytes == null -> "Не удалось измерить: сайт не открылся"
-        else -> "Занято ${formatBytes(cacheBytes!!)}: кэш, офлайн-главы и картинки."
-    }
+    val cacheSummary =
+        when {
+            measuring -> "Считаем занятое место…"
+            cacheBytes == null -> "Не удалось измерить: сайт не открылся"
+            else -> "Занято ${formatBytes(cacheBytes!!)}: кэш, офлайн-главы и картинки."
+        }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -413,14 +467,18 @@ internal fun SiteEditorDialog(
                     isError = error != null,
                     supportingText = {
                         Text(
-                            if (error != null) error!!
-                            else "Можно без https:// — например: *****.me или *****.com/ranobe/123",
+                            if (error != null) {
+                                error!!
+                            } else {
+                                "Можно без https:// — например: *****.me или *****.com/ranobe/123"
+                            },
                         )
                     },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Next,
-                    ),
+                    keyboardOptions =
+                        KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Next,
+                        ),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -454,7 +512,8 @@ internal fun SiteEditorDialog(
                         if (limitMb == 0) {
                             "Выключена: кэш сайта не чистится автоматически."
                         } else {
-                            "Когда кэш сайта превысит $limitMb МБ, скачанные главы удалятся автоматически. Вход сохранится."
+                            "Когда кэш сайта превысит $limitMb МБ, скачанные главы удалятся " +
+                                "автоматически. Вход сохранится."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -473,6 +532,38 @@ internal fun SiteEditorDialog(
                         }
                     }
                 }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Отображение сайта", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Масштаб текста $zoom %",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(listOf(90, 100, 110), listOf(120, 130, 150)).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                row.forEach { option ->
+                                    FilterChip(
+                                        selected = zoom == option,
+                                        onClick = { zoom = option },
+                                        label = { Text("$option %") },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Тёмная тема", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "Перекрашивать сайты без своей тёмной темы",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(checked = dark, onCheckedChange = { dark = it })
+                    }
+                }
                 if (onClearHidden != null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -488,7 +579,7 @@ internal fun SiteEditorDialog(
                             )
                         }
                         if (hiddenCount > 0) {
-                            TextButton(onClick = onClearHidden) { Text("Вернуть") }
+                            TextButton(onClick = { hiddenOpen = true }) { Text("Список") }
                         }
                     }
                 }
@@ -506,6 +597,9 @@ internal fun SiteEditorDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        if (onRecount != null) {
+                            TextButton(onClick = onRecount) { Text("Пересчитать") }
                         }
                         TextButton(onClick = {
                             onClearCache()
@@ -533,7 +627,7 @@ internal fun SiteEditorDialog(
         },
         confirmButton = {
             TextButton(onClick = {
-                val problem = onSave(url.trim(), title.trim().ifBlank { null }, limitMb)
+                val problem = onSave(url.trim(), title.trim().ifBlank { null }, limitMb, zoom, dark)
                 if (problem == null) onDismiss() else error = problem
             }) { Text(if (initial == null) "Добавить" else "Сохранить") }
         },
@@ -541,4 +635,60 @@ internal fun SiteEditorDialog(
             TextButton(onClick = onDismiss) { Text("Отмена") }
         },
     )
+
+    if (hiddenOpen) {
+        AlertDialog(
+            onDismissRequest = { hiddenOpen = false },
+            title = { Text("Скрытые блоки") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (hiddenSelectors.isEmpty()) {
+                        Text(
+                            "Пока ничего не скрыто.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    hiddenSelectors.forEach { selector ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                selector,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (onPreviewHidden != null) {
+                                TextButton(onClick = { onPreviewHidden.invoke(selector) }) {
+                                    Text("Показать")
+                                }
+                            }
+                            if (onDeleteHidden != null) {
+                                TextButton(onClick = { onDeleteHidden.invoke(selector) }) {
+                                    Text("Убрать")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { hiddenOpen = false }) { Text("Готово") }
+            },
+            dismissButton =
+                if (hiddenSelectors.isNotEmpty() && onClearHidden != null) {
+                    {
+                        TextButton(onClick = {
+                            onClearHidden.invoke()
+                            hiddenOpen = false
+                        }) { Text("Вернуть все") }
+                    }
+                } else {
+                    null
+                },
+        )
+    }
 }

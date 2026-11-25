@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class FormatBytesTest {
-
     @Test
     fun smallValuesAreBytes() {
         assertEquals("0 Б", formatBytes(0))

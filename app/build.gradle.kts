@@ -2,6 +2,14 @@
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jlleitschuh.gradle.ktlint")
+}
+
+ktlint {
+    // Стиль проекта: без wildcard-импортов, длина строки 120, отступ 4.
+    filter {
+        exclude("**/build/**")
+    }
 }
 
 android {
@@ -12,8 +20,8 @@ android {
         applicationId = "app.hybridreading"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.0.0"
+        versionCode = 16
+        versionName = "2.1.0"
     }
 
     buildTypes {
@@ -66,6 +74,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.webkit:webkit:1.12.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

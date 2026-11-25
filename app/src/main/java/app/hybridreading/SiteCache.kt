@@ -24,27 +24,72 @@ import java.util.Locale
  * [measure] — сколько байт занимает хранилище origin.
  */
 object SiteCache {
-
     private const val TIMEOUT_MS = 25_000L
     private const val REPORT_DELAY_MS = 3_000L
 
     /** Кэш глав без потери авторизации. */
-    fun clearChapters(context: Context, url: String, onDone: (Int) -> Unit) {
+    fun clearChapters(
+        context: Context,
+        url: String,
+        onDone: (Int) -> Unit,
+    ) {
         run(context, url, CLEAR_CHAPTERS_JS) { report ->
             onDone(deletedCount(report))
         }
     }
 
     /** Полная очистка сайта вместе с сессией. */
-    fun clearAll(context: Context, url: String, onDone: (Int) -> Unit) {
+    fun clearAll(
+        context: Context,
+        url: String,
+        onDone: (Int) -> Unit,
+    ) {
         run(context, url, CLEAR_ALL_JS, clearHttpCache = true) { report ->
             expireSiteCookies(url)
             onDone(deletedCount(report))
         }
     }
 
+    private const val STATS = "cache_stats"
+    private const val STATS_TTL_MS = 10 * 60 * 1000L
+
+    /**
+     * Размер кэша сайта с кэшированием результата на 10 минут: открытие правки сайта больше не грузит
+     * страницу каждый раз. [force] — пересчитать принудительно (кнопка «Пересчитать»).
+     */
+    fun measure(
+        context: Context,
+        url: String,
+        siteId: String,
+        force: Boolean = false,
+        onDone: (Long?) -> Unit,
+    ) {
+        val prefs = context.getSharedPreferences(STATS, Context.MODE_PRIVATE)
+        if (!force) {
+            val saved = prefs.getLong("b_$siteId", -1)
+            val time = prefs.getLong("t_$siteId", 0)
+            if (saved >= 0 && System.currentTimeMillis() - time < STATS_TTL_MS) {
+                onDone(saved)
+                return
+            }
+        }
+        measure(context, url) { bytes ->
+            if (bytes != null) {
+                prefs.edit()
+                    .putLong("b_$siteId", bytes)
+                    .putLong("t_$siteId", System.currentTimeMillis())
+                    .apply()
+            }
+            onDone(bytes)
+        }
+    }
+
     /** Занятое хранилищем origin, байт; null — не удалось узнать (сайт не открылся). */
-    fun measure(context: Context, url: String, onDone: (Long?) -> Unit) {
+    fun measure(
+        context: Context,
+        url: String,
+        onDone: (Long?) -> Unit,
+    ) {
         run(context, url, MEASURE_JS) { report ->
             val bytes = report?.substringAfter(':', "")?.toLongOrNull()
             onDone(bytes)
@@ -78,28 +123,37 @@ object SiteCache {
             if (finished) return
             finished = true
             if (clearHttpCache) runCatching { view.clearCache(true) }
-            ui.post { runCatching { view.stopLoading(); view.destroy() } }
+            ui.post {
+                runCatching {
+                    view.stopLoading()
+                    view.destroy()
+                }
+            }
             onReport(report)
         }
 
-        view.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(v: WebView, pageUrl: String?) {
-                v.evaluateJavascript(script, null)
-                ui.postDelayed({
-                    v.evaluateJavascript("(window.__inkCacheReport || '')") { raw ->
-                        finish(raw?.trim('"')?.takeIf { it.isNotBlank() })
-                    }
-                }, REPORT_DELAY_MS)
-            }
+        view.webViewClient =
+            object : WebViewClient() {
+                override fun onPageFinished(
+                    v: WebView,
+                    pageUrl: String?,
+                ) {
+                    v.evaluateJavascript(script, null)
+                    ui.postDelayed({
+                        v.evaluateJavascript("(window.__inkCacheReport || '')") { raw ->
+                            finish(raw?.trim('"')?.takeIf { it.isNotBlank() })
+                        }
+                    }, REPORT_DELAY_MS)
+                }
 
-            override fun onReceivedError(
-                v: WebView,
-                request: WebResourceRequest,
-                error: WebResourceError,
-            ) {
-                if (request.isForMainFrame) finish(null)
+                override fun onReceivedError(
+                    v: WebView,
+                    request: WebResourceRequest,
+                    error: WebResourceError,
+                ) {
+                    if (request.isForMainFrame) finish(null)
+                }
             }
-        }
 
         ui.postDelayed({ finish(null) }, TIMEOUT_MS)
         runCatching { view.loadUrl(url) }.onFailure { finish(null) }
@@ -211,10 +265,11 @@ internal fun formatBytes(bytes: Long): String {
         value /= 1024.0
         unit++
     }
-    val text = if (value >= 10 || value % 1.0 < 0.05) {
-        String.format(Locale.US, "%.0f", value)
-    } else {
-        String.format(Locale.US, "%.1f", value)
-    }
+    val text =
+        if (value >= 10 || value % 1.0 < 0.05) {
+            String.format(Locale.US, "%.0f", value)
+        } else {
+            String.format(Locale.US, "%.1f", value)
+        }
     return "$text ${units[unit]}".replace('.', ',')
 }

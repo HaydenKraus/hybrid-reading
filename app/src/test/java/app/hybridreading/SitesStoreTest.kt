@@ -5,7 +5,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SitesStoreTest {
-
     @Test
     fun emptyOrBrokenJsonGivesEmptyList() {
         assertTrue(decodeSites(null).isEmpty())
@@ -18,30 +17,33 @@ class SitesStoreTest {
 
     @Test
     fun orderIsPreserved() {
-        val json = """
+        val json =
+            """
             [{"id":"example.com","title":"Example","url":"https://example.com/"},
              {"id":"example.net","title":"Example","url":"https://example.net/"}]
-        """.trimIndent()
+            """.trimIndent()
         val list = decodeSites(json)
         assertEquals(listOf("example.com", "example.net"), list.map { it.id })
     }
 
     @Test
     fun roundTripKeepsOrderAndTitles() {
-        val src = listOf(
-            Site("example.net", "Example", "https://example.net/"),
-            Site("example.com", "Пример", "https://example.com/"),
-            Site("example.me", "Манга", "https://example.me/"),
-        )
+        val src =
+            listOf(
+                Site("example.net", "Example", "https://example.net/"),
+                Site("example.com", "Пример", "https://example.com/"),
+                Site("example.me", "Манга", "https://example.me/"),
+            )
         assertEquals(src, decodeSites(encodeSites(src)))
     }
 
     @Test
     fun duplicatesByIdAreDroppedKeepingFirst() {
-        val json = """
+        val json =
+            """
             [{"id":"example.com","title":"A","url":"https://example.com/"},
              {"id":"example.com","title":"B","url":"https://example.com/other"}]
-        """.trimIndent()
+            """.trimIndent()
         val list = decodeSites(json)
         assertEquals(1, list.size)
         assertEquals(Site("example.com", "A", "https://example.com/"), list[0])
@@ -49,10 +51,11 @@ class SitesStoreTest {
 
     @Test
     fun invalidUrlEntrySkipped() {
-        val json = """
+        val json =
+            """
             [{"id":"bad","title":"Bad","url":"javascript:alert(1)"},
              {"id":"ok.ru","title":"OK","url":"ok.ru"}]
-        """.trimIndent()
+            """.trimIndent()
         assertEquals(listOf(Site("ok.ru", "OK", "https://ok.ru/")), decodeSites(json))
     }
 

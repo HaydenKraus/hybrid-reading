@@ -16,7 +16,6 @@ import java.net.URL
  * с установленной версией; если там новее — предлагаем скачать и поставить.
  */
 object UpdateChecker {
-
     private const val API = "https://api.github.com/repos/HaydenKraus/hybrid-reading/releases/latest"
     private const val APK_NAME = "hybrid-reading-update.apk"
 
@@ -24,7 +23,9 @@ object UpdateChecker {
 
     sealed interface Check {
         data class Newer(val release: Release) : Check
+
         data class Actual(val version: String) : Check
+
         data class Failed(val message: String) : Check
     }
 
@@ -32,12 +33,13 @@ object UpdateChecker {
 
     /** Сетевой вызов: дергать из фонового потока. */
     fun check(): Check {
-        val connection = (URL(API).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 10_000
-            readTimeout = 10_000
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "HybridReading/${BuildConfig.VERSION_NAME}")
-        }
+        val connection =
+            (URL(API).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10_000
+                readTimeout = 10_000
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "HybridReading/${BuildConfig.VERSION_NAME}")
+            }
         return try {
             if (connection.responseCode != 200) {
                 return Check.Failed("GitHub ответил кодом ${connection.responseCode}")
@@ -59,7 +61,15 @@ object UpdateChecker {
             }
             if (apkUrl.isBlank()) return Check.Failed("В релизе нет APK")
             val release = Release(version, tag, apkUrl, json.optString("body").take(600))
-            if (isNewer(version, BuildConfig.VERSION_NAME)) Check.Newer(release) else Check.Actual(BuildConfig.VERSION_NAME)
+            if (isNewer(
+                    version,
+                    BuildConfig.VERSION_NAME,
+                )
+            ) {
+                Check.Newer(release)
+            } else {
+                Check.Actual(BuildConfig.VERSION_NAME)
+            }
         } catch (e: Exception) {
             Check.Failed(e.message ?: "Не удалось связаться с GitHub")
         } finally {
@@ -68,9 +78,13 @@ object UpdateChecker {
     }
 
     /** Сравнение версий по числовым частям: 1.9.0 < 1.10.0. */
-    fun isNewer(candidate: String, current: String): Boolean {
-        fun parts(value: String) = value.split('.', '-', '+')
-            .map { it.takeWhile { ch -> ch.isDigit() }.toIntOrNull() ?: 0 }
+    fun isNewer(
+        candidate: String,
+        current: String,
+    ): Boolean {
+        fun parts(value: String) =
+            value.split('.', '-', '+')
+                .map { it.takeWhile { ch -> ch.isDigit() }.toIntOrNull() ?: 0 }
         val a = parts(candidate)
         val b = parts(current)
         for (i in 0 until maxOf(a.size, b.size)) {
@@ -82,15 +96,20 @@ object UpdateChecker {
     }
 
     /** Скачивает APK во внутренний кэш и отдаёт файл для установки. */
-    fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File {
+    fun download(
+        context: Context,
+        release: Release,
+        onProgress: (Int) -> Unit,
+    ): File {
         val target = File(context.cacheDir, APK_NAME)
         if (target.exists()) target.delete()
-        val connection = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "HybridReading/${BuildConfig.VERSION_NAME}")
-        }
+        val connection =
+            (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "HybridReading/${BuildConfig.VERSION_NAME}")
+            }
         try {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("Не удалось скачать APK (код ${connection.responseCode})")
@@ -117,13 +136,17 @@ object UpdateChecker {
     }
 
     /** Открывает системный установщик для скачанного APK. */
-    fun install(context: Context, apk: File) {
+    fun install(
+        context: Context,
+        apk: File,
+    ) {
         val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        val intent =
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
         context.startActivity(intent)
     }
 }

@@ -22,25 +22,28 @@ class MenuController(
     private val context: Context,
     private val parent: FrameLayout,
 ) {
-
     private val size = dp(BUTTON_DP)
     private val row = dp(ROW_DP)
     private val totalHeight = size + row * ACTIONS
 
-    private val root = FrameLayout(context).apply {
-        layoutParams = FrameLayout.LayoutParams(size, totalHeight)
-    }
+    private val root =
+        FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(size, totalHeight)
+        }
 
     private val main = button(R.drawable.ic_dots, "Меню", 0xFF2E2A54.toInt())
-    private val actions = listOf(
-        button(R.drawable.ic_home, "Главная", 0xFF3A3566.toInt()),
-        button(R.drawable.ic_globe, "Сайты", 0xFF3A3566.toInt()),
-        button(R.drawable.ic_hide, "Удалить блок с сайта", 0xFF3A3566.toInt()),
-    )
+    private val actions =
+        listOf(
+            button(R.drawable.ic_home, "Главная", 0xFF3A3566.toInt()),
+            button(R.drawable.ic_globe, "Сайты", 0xFF3A3566.toInt()),
+            button(R.drawable.ic_hide, "Удалить блок с сайта", 0xFF3A3566.toInt()),
+            button(R.drawable.ic_star, "Закладка", 0xFF3A3566.toInt()),
+        )
 
     private var onHome: () -> Unit = {}
     private var onSites: () -> Unit = {}
     private var onHide: () -> Unit = {}
+    private var onBookmark: () -> Unit = {}
 
     private var leftX = 0
     private var bottomY = 0
@@ -63,15 +66,34 @@ class MenuController(
         parent.addView(root)
 
         main.setOnTouchListener(DragListener())
-        actions[0].setOnClickListener { close(); onHome() }
-        actions[1].setOnClickListener { close(); onSites() }
-        actions[2].setOnClickListener { close(); onHide() }
+        actions[0].setOnClickListener {
+            close()
+            onHome()
+        }
+        actions[1].setOnClickListener {
+            close()
+            onSites()
+        }
+        actions[2].setOnClickListener {
+            close()
+            onHide()
+        }
+        actions[3].setOnClickListener {
+            close()
+            onBookmark()
+        }
     }
 
-    fun bind(onHome: () -> Unit, onSites: () -> Unit, onHide: () -> Unit) {
+    fun bind(
+        onHome: () -> Unit,
+        onSites: () -> Unit,
+        onHide: () -> Unit,
+        onBookmark: () -> Unit = {},
+    ) {
         this.onHome = onHome
         this.onSites = onSites
         this.onHide = onHide
+        this.onBookmark = onBookmark
     }
 
     /** Первое размещение: сохранённое место или правый нижний угол. */
@@ -116,16 +138,20 @@ class MenuController(
     }
 
     /** Кнопка в контейнере фиксированного размера: положение задаётся отступом сверху. */
-    private fun box(top: Int): FrameLayout.LayoutParams =
-        FrameLayout.LayoutParams(size, size).apply { topMargin = top }
+    private fun box(top: Int): FrameLayout.LayoutParams = FrameLayout.LayoutParams(size, size).apply { topMargin = top }
 
-    private fun button(icon: Int, description: String, color: Int): ImageButton =
+    private fun button(
+        icon: Int,
+        description: String,
+        color: Int,
+    ): ImageButton =
         ImageButton(context).apply {
             setImageResource(icon)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(color)
-            }
+            background =
+                GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(color)
+                }
             contentDescription = description
             val pad = dp(16)
             setPadding(pad, pad, pad, pad)
@@ -135,7 +161,10 @@ class MenuController(
     /** Перетаскивание: двигаем весь столбик, по отпусканию без движения — раскрываем список. */
     @SuppressLint("ClickableViewAccessibility")
     private inner class DragListener : View.OnTouchListener {
-        override fun onTouch(view: View, event: MotionEvent): Boolean {
+        override fun onTouch(
+            view: View,
+            event: MotionEvent,
+        ): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downRawX = event.rawX
@@ -178,7 +207,7 @@ class MenuController(
     companion object {
         private const val BUTTON_DP = 56
         private const val ROW_DP = 64
-        private const val ACTIONS = 3
+        private const val ACTIONS = 4
         private const val PREFS = "menu_button"
         private const val KEY_X = "x"
         private const val KEY_BOTTOM = "bottom"

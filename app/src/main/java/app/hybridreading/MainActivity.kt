@@ -31,7 +31,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
-
     /** Ссылка из внешнего intent: WebView создаётся позже, поэтому адрес запоминаем. */
     private var pendingUrl by mutableStateOf<String?>(null)
 
@@ -39,14 +38,18 @@ class MainActivity : ComponentActivity() {
     private val pauseTimers = Runnable { WebHolder.pauseTimers() }
 
     /** Экран погас — гасим WebView целиком; включился — возвращаем к жизни. */
-    private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> WebHolder.onScreenOff()
-                Intent.ACTION_SCREEN_ON -> WebHolder.onScreenOn()
+    private val screenReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?,
+            ) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> WebHolder.onScreenOff()
+                    Intent.ACTION_SCREEN_ON -> WebHolder.onScreenOn()
+                }
             }
         }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,9 +70,10 @@ class MainActivity : ComponentActivity() {
                     Box(Modifier.fillMaxSize().systemBarsPadding()) {
                         val context = LocalContext.current
                         // Утром открываем ту страницу, где остановились, а не корень сайта.
-                        val startUrl = remember {
-                            SitesStore.active.value?.let { ReadingState.lastUrl(context, it.url) }
-                        }
+                        val startUrl =
+                            remember {
+                                SitesStore.active.value?.let { ReadingState.lastUrl(context, it.url) }
+                            }
                         val firstRun = remember { SitesStore.sites.value.isEmpty() }
                         AppRoot(
                             pendingUrl = pendingUrl,
@@ -102,6 +106,7 @@ class MainActivity : ComponentActivity() {
         WebHolder.webView?.url?.takeIf { it.startsWith("http") }?.let { url ->
             val siteId = SitesStore.active.value?.id.orEmpty()
             ReadingState.rememberPage(this, url, UiState.pageTitle, siteId)
+            History.add(this, url, UiState.pageTitle, siteId)
         }
         Thread { runCatching { CookieManager.getInstance().flush() } }.start()
         WebHolder.webView?.onPause()
@@ -155,6 +160,7 @@ private fun AppRoot(
     val context = LocalContext.current
 
     var drawer by remember { mutableStateOf(false) }
+    var historyScreen by remember { mutableStateOf(false) }
     var home by remember { mutableStateOf(startAtHome || site == null) }
     var reloadToken by remember { mutableStateOf(0) }
 
@@ -168,6 +174,7 @@ private fun AppRoot(
 
     BackHandler(enabled = true) {
         when {
+            historyScreen -> historyScreen = false
             drawer -> drawer = false
             home -> home = false
             WebHolder.goBack() -> Unit
@@ -200,6 +207,16 @@ private fun AppRoot(
                 startUrl = startUrl,
                 onOpenSites = { drawer = true },
                 onHome = { home = true },
+                onPageSeen = { url, title ->
+                    History.add(context, url, title, SitesStore.active.value?.id.orEmpty())
+                },
+                onBookmark = {
+                    val url = WebHolder.webView?.url
+                    if (url != null && url.startsWith("http")) {
+                        val added = History.toggleBookmark(context, url, UiState.pageTitle)
+                        toast(if (added) "Добавлено в закладки" else "Убрано из закладок")
+                    }
+                },
                 onPageTitle = { UiState.pageTitle = it },
             )
         }
@@ -209,9 +226,10 @@ private fun AppRoot(
                 HomeScreen(
                     sites = sites,
                     activeId = site?.id,
-                    recents = remember(home, sites, UiState.resumeTick) {
-                        ReadingState.recentPages(context)
-                    },
+                    recents =
+                        remember(home, sites, UiState.resumeTick) {
+                            ReadingState.recentPages(context)
+                        },
                     versionName = BuildConfig.VERSION_NAME,
                     onOpenSite = {
                         SitesStore.select(it.id)
@@ -222,13 +240,28 @@ private fun AppRoot(
                         home = false
                         loadRequest = recent.url
                     },
-                    onAddSite = { url, title, limit ->
-                        val error = SitesStore.add(url, title, limit).exceptionOrNull()?.message
+                    onAddSite = { url, title, limit, zoom, dark ->
+                        val error = SitesStore.add(url, title, limit, zoom, dark).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт, чтобы не искать его в списке.
                         if (error == null) home = false
                         error
                     },
                     onMenu = { drawer = true },
+                    onHistory = { historyScreen = true },
+                )
+            }
+        }
+
+        if (historyScreen) {
+            Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                HistoryScreen(
+                    onBack = { historyScreen = false },
+                    onOpen = { url, siteId ->
+                        siteId.takeIf { it.isNotBlank() }?.let { SitesStore.select(it) }
+                        historyScreen = false
+                        home = false
+                        loadRequest = url
+                    },
                 )
             }
         }
@@ -243,8 +276,8 @@ private fun AppRoot(
                         SitesStore.select(it.id)
                         drawer = false
                     },
-                    onAdd = { url, title, limit ->
-                        val error = SitesStore.add(url, title, limit).exceptionOrNull()?.message
+                    onAdd = { url, title, limit, zoom, dark ->
+                        val error = SitesStore.add(url, title, limit, zoom, dark).exceptionOrNull()?.message
                         // Добавили — сразу открываем сайт: меню закрываем, чтобы не искать его в списке.
                         if (error == null) {
                             drawer = false
@@ -252,8 +285,8 @@ private fun AppRoot(
                         }
                         error
                     },
-                    onUpdate = { target, url, title, limit ->
-                        SitesStore.update(target.id, url, title, limit).exceptionOrNull()?.message
+                    onUpdate = { target, url, title, limit, zoom, dark ->
+                        SitesStore.update(target.id, url, title, limit, zoom, dark).exceptionOrNull()?.message
                     },
                     onDelete = { target, wipeData ->
                         SitesStore.remove(target.id)
@@ -267,8 +300,18 @@ private fun AppRoot(
                         }
                     },
                     onMeasureSiteCache = { target, callback ->
-                        SiteCache.measure(context, target.url, callback)
+                        SiteCache.measure(context, target.url, target.id, force = false, onDone = callback)
                     },
+                    onRecountResult = { target, bytes ->
+                        toast(
+                            if (bytes != null) {
+                                "Кэш «${target.title}»: ${formatBytes(bytes)}"
+                            } else {
+                                "Не удалось измерить кэш"
+                            },
+                        )
+                    },
+                    onPreviewHiddenBlock = { _, selector -> WebHolder.previewHidden(selector) },
                     onClearSiteCache = { target, full ->
                         val done: (Int) -> Unit = { count ->
                             val what = if (full) "Сайт очищен" else "Кэш глав очищен"

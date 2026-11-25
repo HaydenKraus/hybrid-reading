@@ -1,41 +1,13 @@
 package app.hybridreading
 
 import android.annotation.SuppressLint
-import android.content.Context
-import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.drawable.GradientDrawable
-import android.net.Uri
-import android.net.http.SslError
-import android.os.Handler
-import android.os.Looper
-import android.os.Message
 import android.view.Gravity
 import android.view.View
-import android.widget.Toast
 import android.view.ViewGroup
-import android.widget.FrameLayout
-import android.widget.ImageButton
-import android.webkit.CookieManager
-import android.webkit.GeolocationPermissions
-import android.webkit.JavascriptInterface
-import android.webkit.JsPromptResult
-import android.webkit.JsResult
-import android.webkit.PermissionRequest
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.SslErrorHandler
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,12 +17,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,15 +51,22 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import java.net.URI
+import androidx.core.content.ContextCompat
 
 /** Один WebView на всё приложение: из Activity к нему обращаются back-обработчик и intent'ы. */
 object WebHolder {
     var webView: WebView? = null
 
+    /** Движок последнего WebView: нужен для действий вне композиции (показ скрытого блока). */
+    internal var engineRef: WebEngineState? = null
+
     private var pausedForScreen = false
 
-    /** true, если WebView ушёл на предыдущую страницу. */
+    /** Показать скрытый блок на несколько секунд из правки сайта. */
+    fun previewHidden(selector: String) {
+        webView?.let { WebHolder.engineRef?.previewHidden(selector) }
+    }
+
     fun goBack(): Boolean {
         val view = webView ?: return false
         if (!view.canGoBack()) return false
@@ -152,94 +129,106 @@ fun WebScreen(
     startUrl: String?,
     onOpenSites: () -> Unit,
     onHome: () -> Unit,
+    onBookmark: () -> Unit = {},
+    onPageSeen: (url: String, title: String) -> Unit = { _, _ -> },
     onPageTitle: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val engine = remember { WebEngineState(context) }
 
     // Камера/микрофон: страница просит доступ, спрашиваем разрешение у системы и отдаём ответ сайту.
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        val request = engine.pendingPermission
-        engine.pendingPermission = null
-        if (request == null) return@rememberLauncherForActivityResult
-        if (allGranted(context, request)) grantSupported(request) else request.deny()
-    }
+    val permissionLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions(),
+        ) {
+            val request = engine.pendingPermission
+            engine.pendingPermission = null
+            if (request == null) return@rememberLauncherForActivityResult
+            if (allGranted(context, request)) grantSupported(request) else request.deny()
+        }
 
     // Номер поколения WebView: ++ после краша рендерера — композиция соберёт новый.
     val generation = engine.generation
 
     // WebView создаётся один раз: пересоздание рвёт историю, куки в памяти и OAuth-цепочки.
-    val webView = remember(generation) {
-        engine.createMain().also { WebHolder.webView = it }
-    }
+    val webView =
+        remember(generation) {
+            engine.createMain().also {
+                WebHolder.webView = it
+                WebHolder.engineRef = engine
+            }
+        }
 
     // Кнопка меню — обычный View поверх WebView в том же контейнере: Compose-оверлей
     // поверх AndroidView не рисуется, а Popup на Android 16 не получает касания.
     val openSites by rememberUpdatedState(onOpenSites)
     val goHome by rememberUpdatedState(onHome)
+    val addBookmark by rememberUpdatedState(onBookmark)
 
     // Панель режима выбора блока: подсказка и выход. Обычный View — Compose поверх AndroidView не рисуется.
-    val pickerBar = remember(generation) {
-        android.widget.LinearLayout(context).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xF22E2A54.toInt())
-            setPadding(context.dp(16), context.dp(8), context.dp(4), context.dp(8))
-            addView(
-                android.widget.TextView(context).apply {
-                    text = "Выберите блок, который нужно скрыть"
-                    setTextColor(0xFFFFFFFF.toInt())
-                    textSize = 13f
-                },
-                android.widget.LinearLayout.LayoutParams(
-                    0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    1f,
-                ),
-            )
-            addView(
-                android.widget.Button(context).apply {
-                    text = "Отмена"
-                    setOnClickListener { engine.stopPicker() }
-                },
-                android.widget.LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-            visibility = View.GONE
-        }
-    }
-
-    val container = remember(generation) {
-        FrameLayout(context).apply {
-            addView(
-                webView,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
-            )
-            val menu = MenuController(context, this).apply {
-                bind(
-                    onHome = { goHome() },
-                    onSites = { openSites() },
-                    onHide = { engine.startPicker() },
+    val pickerBar =
+        remember(generation) {
+            android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundColor(0xF22E2A54.toInt())
+                setPadding(context.dp(16), context.dp(8), context.dp(4), context.dp(8))
+                addView(
+                    android.widget.TextView(context).apply {
+                        text = "Выберите блок, который нужно скрыть"
+                        setTextColor(0xFFFFFFFF.toInt())
+                        textSize = 13f
+                    },
+                    android.widget.LinearLayout.LayoutParams(
+                        0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        1f,
+                    ),
                 )
+                addView(
+                    android.widget.Button(context).apply {
+                        text = "Отмена"
+                        setOnClickListener { engine.stopPicker() }
+                    },
+                    android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ),
+                )
+                visibility = View.GONE
             }
-            addView(
-                pickerBar,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = context.dp(8) },
-            )
-            // Позицию кнопки восстанавливаем, когда контейнер уже измерился.
-            post { menu.restore() }
         }
-    }
+
+    val container =
+        remember(generation) {
+            FrameLayout(context).apply {
+                addView(
+                    webView,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                val menu =
+                    MenuController(context, this).apply {
+                        bind(
+                            onHome = { goHome() },
+                            onSites = { openSites() },
+                            onHide = { engine.startPicker() },
+                            onBookmark = { addBookmark() },
+                        )
+                    }
+                addView(
+                    pickerBar,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = context.dp(8) },
+                )
+                // Позицию кнопки восстанавливаем, когда контейнер уже измерился.
+                post { menu.restore() }
+            }
+        }
 
     SideEffect {
         // Свежие значения из композиции — обычные поля, чтобы не пересобирать WebView.
@@ -247,7 +236,9 @@ fun WebScreen(
             pickerBar.visibility = if (picking) View.VISIBLE else View.GONE
         }
         engine.site = site
+        engine.applyDisplay(site, webView)
         engine.onTitle = onPageTitle
+        engine.onPageSeen = onPageSeen
         engine.permissionHandler = { request ->
             val needed = requiredPermissions(request)
             when {
@@ -255,7 +246,10 @@ fun WebScreen(
                 request.origin?.toString()?.startsWith("https://") != true -> request.deny()
                 // Второй запрос не должен затирать первый: незакрытый getUserMedia завис бы навсегда.
                 engine.pendingPermission != null -> request.deny()
-                needed.all { ContextCompat.checkSelfPermission(context, it) == android.content.pm.PackageManager.PERMISSION_GRANTED } ->
+                needed.all {
+                    ContextCompat.checkSelfPermission(context, it) ==
+                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                } ->
                     grantSupported(request)
                 else -> {
                     engine.pendingPermission = request
@@ -298,10 +292,11 @@ fun WebScreen(
     }
 
     // Выбор файла: WebChromeClient положил запрос в состояние, здесь показываем системный пикер.
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val request = engine.takeChooser() ?: return@rememberLauncherForActivityResult
-        request.callback.onReceiveValue(collectUris(result))
-    }
+    val filePicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val request = engine.takeChooser() ?: return@rememberLauncherForActivityResult
+            request.callback.onReceiveValue(collectUris(result))
+        }
 
     LaunchedEffect(engine.chooser) {
         val request = engine.chooser ?: return@LaunchedEffect
@@ -376,10 +371,11 @@ fun WebScreen(
         if (popupView != null) {
             Dialog(
                 onDismissRequest = { engine.closePopup() },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    decorFitsSystemWindows = false,
-                ),
+                properties =
+                    DialogProperties(
+                        usePlatformDefaultWidth = false,
+                        decorFitsSystemWindows = false,
+                    ),
             ) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column(Modifier.fillMaxSize().systemBarsPadding()) {
@@ -412,10 +408,11 @@ fun WebScreen(
         if (customView != null) {
             Dialog(
                 onDismissRequest = { engine.hideCustomView() },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    decorFitsSystemWindows = false,
-                ),
+                properties =
+                    DialogProperties(
+                        usePlatformDefaultWidth = false,
+                        decorFitsSystemWindows = false,
+                    ),
             ) {
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
                     AndroidView(factory = { customView }, modifier = Modifier.fillMaxSize())
@@ -432,9 +429,11 @@ fun WebScreen(
 
 /** Состояние и клиенты WebView. Обычные поля вместо Compose-состояния — клиенты живут вне композиции. */
 @SuppressLint("SetJavaScriptEnabled")
-
 @Composable
-private fun JsDialogUi(dialog: JsDialogRequest, onDone: () -> Unit) {
+private fun JsDialogUi(
+    dialog: JsDialogRequest,
+    onDone: () -> Unit,
+) {
     var text by remember(dialog) { mutableStateOf(dialog.defaultValue.orEmpty()) }
 
     val finish: (Boolean) -> Unit = { ok ->
@@ -454,7 +453,7 @@ private fun JsDialogUi(dialog: JsDialogRequest, onDone: () -> Unit) {
                     JsDialogRequest.Kind.ALERT -> "Сообщение сайта"
                     JsDialogRequest.Kind.CONFIRM -> "Подтвердите действие"
                     JsDialogRequest.Kind.PROMPT -> "Сайт спрашивает"
-                }
+                },
             )
         },
         text = {

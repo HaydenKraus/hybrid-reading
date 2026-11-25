@@ -18,7 +18,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MenuControllerTest {
-
     private fun controller(): Triple<MenuController, FrameLayout, Activity> {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val parent = FrameLayout(activity)
@@ -33,6 +32,7 @@ class MenuControllerTest {
 
     private fun buttons(parent: ViewGroup): Map<String, ImageButton> {
         val found = HashMap<String, ImageButton>()
+
         fun walk(view: ViewGroup) {
             for (i in 0 until view.childCount) {
                 val child = view.getChildAt(i)
@@ -48,7 +48,10 @@ class MenuControllerTest {
     fun allFourButtonsExist() {
         val (_, parent, _) = controller()
         val names = buttons(parent).keys
-        assertEquals(setOf("Меню", "Главная", "Сайты", "Удалить блок с сайта"), names)
+        assertEquals(
+            setOf("Меню", "Главная", "Сайты", "Удалить блок с сайта", "Закладка"),
+            names,
+        )
     }
 
     @Test
@@ -77,19 +80,23 @@ class MenuControllerTest {
         var homeCalls = 0
         var sitesCalls = 0
         var hideCalls = 0
+        var bookmarkCalls = 0
         controller.bind(
             onHome = { homeCalls++ },
             onSites = { sitesCalls++ },
             onHide = { hideCalls++ },
+            onBookmark = { bookmarkCalls++ },
         )
 
         found.getValue("Главная").performClick()
         found.getValue("Сайты").performClick()
         found.getValue("Удалить блок с сайта").performClick()
+        found.getValue("Закладка").performClick()
 
         assertEquals(1, homeCalls)
         assertEquals(1, sitesCalls)
         assertEquals(1, hideCalls)
+        assertEquals(1, bookmarkCalls)
         // После выбора действия меню сворачивается.
         assertFalse(controller.isExpanded())
     }

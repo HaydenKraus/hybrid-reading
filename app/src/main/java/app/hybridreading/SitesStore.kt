@@ -12,6 +12,10 @@ data class Site(
     val url: String,
     /** Автоочистка кэша главы: при превышении этого объёма кэш сайта чистится. 0 — не чистить. */
     val cacheLimitMb: Int = 0,
+    /** Масштаб текста страницы в процентах: 90…150. */
+    val textZoom: Int = 100,
+    /** Принудительная тёмная тема для сайтов без своей. */
+    val darkMode: Boolean = false,
 )
 
 /**
@@ -19,7 +23,6 @@ data class Site(
  * домашнюю страницу, а сайты пользователь добавляет сам. Хранится в SharedPreferences("sites").
  */
 object SitesStore {
-
     private const val PREFS = "sites"
     private const val KEY_LIST = "list"
     private const val KEY_ACTIVE = "active"
@@ -52,19 +55,28 @@ object SitesStore {
         prefs?.edit()?.putString(KEY_ACTIVE, id)?.apply()
     }
 
-    fun add(rawUrl: String, rawTitle: String?, cacheLimitMb: Int = 0): Result<Site> {
-        val url = UrlTools.normalize(rawUrl)
-            ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
-        val id = UrlTools.idFor(url)
-            ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
+    fun add(
+        rawUrl: String,
+        rawTitle: String?,
+        cacheLimitMb: Int = 0,
+        textZoom: Int = 100,
+        darkMode: Boolean = false,
+    ): Result<Site> {
+        val url =
+            UrlTools.normalize(rawUrl)
+                ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
+        val id =
+            UrlTools.idFor(url)
+                ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
         val title = rawTitle?.trim()?.ifBlank { null } ?: UrlTools.titleFor(url)
-        val site = Site(id, title, url, cacheLimitMb)
+        val site = Site(id, title, url, cacheLimitMb, textZoom, darkMode)
         val current = _sites.value
-        val updated = if (current.any { it.id == id }) {
-            current.map { if (it.id == id) site else it }
-        } else {
-            current + site
-        }
+        val updated =
+            if (current.any { it.id == id }) {
+                current.map { if (it.id == id) site else it }
+            } else {
+                current + site
+            }
         publish(updated, id)
         return Result.success(site)
     }
@@ -73,20 +85,33 @@ object SitesStore {
      * Правка сайта: название, ссылка и блокировка рекламы.
      * Смена домена меняет id, поэтому занятый адрес отклоняется с понятной ошибкой.
      */
-    fun update(id: String, rawUrl: String, rawTitle: String?, cacheLimitMb: Int = 0): Result<Site> {
+    fun update(
+        id: String,
+        rawUrl: String,
+        rawTitle: String?,
+        cacheLimitMb: Int = 0,
+        textZoom: Int = 100,
+        darkMode: Boolean = false,
+    ): Result<Site> {
         val current = _sites.value
-        val existing = current.firstOrNull { it.id == id }
-            ?: return Result.failure(IllegalArgumentException("Сайт не найден"))
-        val url = UrlTools.normalize(rawUrl)
-            ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
-        val newId = UrlTools.idFor(url)
-            ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
+        val existing =
+            current.firstOrNull { it.id == id }
+                ?: return Result.failure(IllegalArgumentException("Сайт не найден"))
+        val url =
+            UrlTools.normalize(rawUrl)
+                ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
+        val newId =
+            UrlTools.idFor(url)
+                ?: return Result.failure(IllegalArgumentException("Некорректная ссылка"))
         if (newId != id && current.any { it.id == newId }) {
             return Result.failure(IllegalArgumentException("Такой сайт уже добавлен"))
         }
         val title = rawTitle?.trim()?.ifBlank { null } ?: UrlTools.titleFor(url)
-        val site = Site(newId, title, url, cacheLimitMb)
-        publish(current.map { if (it.id == id) site else it }, if (_active.value?.id == id) newId else _active.value?.id)
+        val site = Site(newId, title, url, cacheLimitMb, textZoom, darkMode)
+        publish(
+            current.map { if (it.id == id) site else it },
+            if (_active.value?.id == id) newId else _active.value?.id,
+        )
         return Result.success(site)
     }
 
@@ -105,11 +130,15 @@ object SitesStore {
     }
 
     /** Публикует новый список, выбирает валидный активный сайт и пишет всё в prefs. */
-    private fun publish(list: List<Site>, activeId: String?) {
+    private fun publish(
+        list: List<Site>,
+        activeId: String?,
+    ) {
         _sites.value = list
-        val active = list.firstOrNull { it.id == activeId }
-            ?: _active.value?.let { current -> list.firstOrNull { it.id == current.id } }
-            ?: list.firstOrNull()
+        val active =
+            list.firstOrNull { it.id == activeId }
+                ?: _active.value?.let { current -> list.firstOrNull { it.id == current.id } }
+                ?: list.firstOrNull()
         _active.value = active
         prefs?.edit()
             ?.putString(KEY_LIST, encodeSites(list))
@@ -120,7 +149,14 @@ object SitesStore {
 
 // --- Чистые функции разбора/сериализации: без SharedPreferences, тестируются на JVM ---
 
-private data class RawSite(val id: String, val title: String, val url: String, val limit: Int)
+private data class RawSite(
+    val id: String,
+    val title: String,
+    val url: String,
+    val limit: Int,
+    val zoom: Int,
+    val dark: Boolean,
+)
 
 /** Пустой/битый json -> пустой список; дубликаты по id отбрасываются, порядок сохраняется. */
 internal fun decodeSites(raw: String?): List<Site> {
@@ -130,33 +166,39 @@ internal fun decodeSites(raw: String?): List<Site> {
         val url = UrlTools.normalize(entry.url) ?: continue
         val id = entry.id.trim().ifEmpty { UrlTools.idFor(url).orEmpty() }
         if (id.isEmpty() || result.containsKey(id)) continue
-        result[id] = Site(
-            id = id,
-            title = entry.title.trim().ifBlank { UrlTools.titleFor(url) },
-            url = url,
-            cacheLimitMb = entry.limit.coerceAtLeast(0),
-        )
+        result[id] =
+            Site(
+                id = id,
+                title = entry.title.trim().ifBlank { UrlTools.titleFor(url) },
+                url = url,
+                cacheLimitMb = entry.limit.coerceAtLeast(0),
+                textZoom = entry.zoom.coerceIn(90, 150),
+                darkMode = entry.dark,
+            )
     }
     return result.values.toList()
 }
 
-internal fun encodeSites(list: List<Site>): String = list.joinToString(",", "[", "]") { site ->
-    "{\"id\":${quoted(site.id)},\"title\":${quoted(site.title)},\"url\":${quoted(site.url)},\"limit\":${site.cacheLimitMb}}"
-}
-
-private fun quoted(value: String): String = buildString(value.length + 2) {
-    append('"')
-    for (c in value) when {
-        c == '"' -> append("\\\"")
-        c == '\\' -> append("\\\\")
-        c == '\n' -> append("\\n")
-        c == '\r' -> append("\\r")
-        c == '\t' -> append("\\t")
-        c < ' ' -> append("\\u").append(c.code.toString(16).padStart(4, '0'))
-        else -> append(c)
+internal fun encodeSites(list: List<Site>): String =
+    list.joinToString(",", "[", "]") { site ->
+        "{\"id\":${quoted(site.id)},\"title\":${quoted(site.title)},\"url\":${quoted(site.url)}," +
+            "\"limit\":${site.cacheLimitMb},\"zoom\":${site.textZoom},\"dark\":${site.darkMode}}"
     }
-    append('"')
-}
+
+private fun quoted(value: String): String =
+    buildString(value.length + 2) {
+        append('"')
+        for (c in value) when {
+            c == '"' -> append("\\\"")
+            c == '\\' -> append("\\\\")
+            c == '\n' -> append("\\n")
+            c == '\r' -> append("\\r")
+            c == '\t' -> append("\\t")
+            c < ' ' -> append("\\u").append(c.code.toString(16).padStart(4, '0'))
+            else -> append(c)
+        }
+        append('"')
+    }
 
 private fun parseSiteArray(raw: String): List<RawSite>? {
     val cursor = JsonCursor(raw)
@@ -165,12 +207,15 @@ private fun parseSiteArray(raw: String): List<RawSite>? {
     if (cursor.take(']')) return list
     while (true) {
         val obj = cursor.readObject() ?: return null
-        list += RawSite(
-            id = obj["id"].orEmpty(),
-            title = obj["title"].orEmpty(),
-            url = obj["url"].orEmpty(),
-            limit = obj["limit"]?.toIntOrNull() ?: 0,
-        )
+        list +=
+            RawSite(
+                id = obj["id"].orEmpty(),
+                title = obj["title"].orEmpty(),
+                url = obj["url"].orEmpty(),
+                limit = obj["limit"]?.toIntOrNull() ?: 0,
+                zoom = obj["zoom"]?.toIntOrNull() ?: 100,
+                dark = obj["dark"]?.toBooleanStrictOrNull() ?: false,
+            )
         if (cursor.take(',')) continue
         if (cursor.take(']')) return list
         return null
@@ -258,12 +303,13 @@ private class JsonCursor(private val src: String) {
     private fun readLiteralText(): String? {
         skipWs()
         val rest = src.substring(pos)
-        val token = when {
-            rest.startsWith("true") -> "true"
-            rest.startsWith("false") -> "false"
-            rest.startsWith("null") -> "null"
-            else -> return null
-        }
+        val token =
+            when {
+                rest.startsWith("true") -> "true"
+                rest.startsWith("false") -> "false"
+                rest.startsWith("null") -> "null"
+                else -> return null
+            }
         pos += token.length
         return token
     }
@@ -277,11 +323,13 @@ private class JsonCursor(private val src: String) {
             '[' -> skipArray()
             else -> {
                 val start = pos
-                while (pos < src.length && (src[pos].isLetterOrDigit() || src[pos] == '-' || src[pos] == '+' || src[pos] == '.')) pos++
+                while (pos < src.length && isLiteralChar(src[pos])) pos++
                 pos > start
             }
         }
     }
+
+    private fun isLiteralChar(ch: Char): Boolean = ch.isLetterOrDigit() || ch == '-' || ch == '+' || ch == '.'
 
     private fun skipObject(): Boolean {
         if (!take('{')) return false

@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UrlToolsTest {
-
     @Test
     fun bareDomainGetsHttpsAndPathKept() {
         assertEquals("https://example.net/foo", UrlTools.normalize("example.net/foo"))

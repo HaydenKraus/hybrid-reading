@@ -11,7 +11,6 @@ import org.json.JSONObject
  * приложение честно пишет в диалоге импорта.
  */
 object ProfileBackup {
-
     private const val VERSION = 1
 
     fun buildJson(context: Context): String {
@@ -29,21 +28,36 @@ object ProfileBackup {
                 },
             )
         }
+        val bookmarks = JSONArray()
+        History.bookmarks(context).forEach { bookmark ->
+            bookmarks.put(
+                JSONObject().apply {
+                    put("url", bookmark.url)
+                    put("title", bookmark.title)
+                },
+            )
+        }
         return JSONObject().apply {
             put("app", "Hybrid Reading")
             put("version", VERSION)
             put("exportedAt", System.currentTimeMillis())
             put("sites", sites)
+            put("bookmarks", bookmarks)
         }.toString(2)
     }
 
     /** Возвращает человекочитаемый итог или бросает исключение с понятным текстом. */
-    fun restore(context: Context, json: String): String {
-        val root = runCatching { JSONObject(json) }.getOrElse {
-            throw IllegalArgumentException("Это не файл профиля Hybrid Reading")
-        }
-        val array = root.optJSONArray("sites")
-            ?: throw IllegalArgumentException("В файле нет списка сайтов")
+    fun restore(
+        context: Context,
+        json: String,
+    ): String {
+        val root =
+            runCatching { JSONObject(json) }.getOrElse {
+                throw IllegalArgumentException("Это не файл профиля Hybrid Reading")
+            }
+        val array =
+            root.optJSONArray("sites")
+                ?: throw IllegalArgumentException("В файле нет списка сайтов")
         if (array.length() == 0) throw IllegalArgumentException("В файле нет ни одного сайта")
 
         val restored = ArrayList<Site>()
@@ -68,6 +82,17 @@ object ProfileBackup {
         for ((id, selectors) in hiddenBySite) {
             HiddenBlocks.clear(context, id)
             selectors.forEach { HiddenBlocks.add(context, id, it) }
+        }
+        val bookmarksArray = root.optJSONArray("bookmarks")
+        if (bookmarksArray != null) {
+            val bookmarks = ArrayList<History.Bookmark>()
+            for (i in 0 until bookmarksArray.length()) {
+                val item = bookmarksArray.optJSONObject(i) ?: continue
+                val url = item.optString("url")
+                if (!url.startsWith("http")) continue
+                bookmarks += History.Bookmark(url, item.optString("title"))
+            }
+            History.replaceBookmarks(context, bookmarks)
         }
         val hiddenTotal = hiddenBySite.values.sumOf { it.size }
         return "Сайтов: ${restored.size}, скрытых блоков: $hiddenTotal"

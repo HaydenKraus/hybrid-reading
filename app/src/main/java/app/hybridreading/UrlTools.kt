@@ -6,7 +6,6 @@ import java.net.IDN
  * Разбор ссылок на сайты. Чистый Kotlin (без Android), чтобы тестировать на JVM.
  */
 object UrlTools {
-
     private val SCHEME = Regex("^([A-Za-z][A-Za-z0-9+.\\-]*)://")
     private val OPAQUE = Regex("^([A-Za-z][A-Za-z0-9+.\\-]*):")
     private val IPV4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
@@ -27,8 +26,9 @@ object UrlTools {
             val opaque = OPAQUE.find(rest)
             val prefix = opaque?.groupValues?.get(1)?.lowercase()
             // "example.net:8080" и "localhost:3000" — хост с портом, а не схема.
-            val hostWithPort = prefix != null &&
-                (prefix.contains('.') || rest.getOrNull(opaque!!.range.last + 1)?.isDigit() == true)
+            val hostWithPort =
+                prefix != null &&
+                    (prefix.contains('.') || rest.getOrNull(opaque!!.range.last + 1)?.isDigit() == true)
             if (prefix != null && !hostWithPort) {
                 if (prefix != "http" && prefix != "https") return null
                 scheme = prefix
@@ -95,18 +95,23 @@ object UrlTools {
         }
         // IDN.toASCII отсеивает пробелы, слишком длинные метки и прочий мусор,
         // но в результат отдаём исходный (кириллический) домен.
-        val ascii = try {
-            IDN.toASCII(host, IDN.ALLOW_UNASSIGNED)
-        } catch (e: IllegalArgumentException) {
-            return false
-        }
+        val ascii =
+            try {
+                IDN.toASCII(host, IDN.ALLOW_UNASSIGNED)
+            } catch (e: IllegalArgumentException) {
+                return false
+            }
         if (ascii.isEmpty()) return false
         val labels = ascii.split('.')
         if (labels.size < 2) return false
         for (label in labels) {
             if (label.isEmpty() || label.length > 63) return false
             if (label.startsWith('-') || label.endsWith('-')) return false
-            if (label.any { it !in 'a'..'z' && it !in 'A'..'Z' && it !in '0'..'9' && it != '-' && it != '_' }) return false
+            val invalid =
+                label.any { ch ->
+                    ch !in 'a'..'z' && ch !in 'A'..'Z' && ch !in '0'..'9' && ch != '-' && ch != '_'
+                }
+            if (invalid) return false
         }
         return labels.last().any { !it.isDigit() }
     }
