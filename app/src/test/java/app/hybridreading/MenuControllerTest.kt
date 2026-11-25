@@ -73,6 +73,18 @@ class MenuControllerTest {
     }
 
     @Test
+    fun hidesAndRevealsFromEdge() {
+        val (controller, _, _) = controller()
+        controller.restore()
+
+        assertFalse(controller.isHidden())
+        controller.hide()
+        assertTrue(controller.isHidden())
+        controller.reveal()
+        assertFalse(controller.isHidden())
+    }
+
+    @Test
     fun actionsCallTheirCallbacks() {
         val (controller, parent, _) = controller()
         controller.restore()
